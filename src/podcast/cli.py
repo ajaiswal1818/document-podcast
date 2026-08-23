@@ -10,13 +10,27 @@ from pathlib import Path
 import time
 from typing import Any
 
+from podcast.conversation.controller import ConversationController
 from podcast.document.parser import DocumentParser, chunk_text
 from podcast.llm.qwen import Qwen
 from podcast.podcast.dialogue import PodcastDialogue
 from podcast.podcast.editor import StoryEditor
 from podcast.podcast.planner import analyse_chunk, build_episode_plan, translate_technical_terms
 from podcast.podcast.story import build_story_blueprint
+from podcast.tts import VibeVoiceTTS, get_tts_backend
 from podcast.tts.kokoro import KokoroTTS, assemble_audio_files
+
+
+def _make_tts_backend(name: str) -> Any:
+    """Create a TTS backend while preserving compatibility with existing test monkeypatches."""
+    backend_name = (name or "kokoro").lower()
+    if backend_name == "kokoro":
+        ctor = globals().get("KokoroTTS") or get_tts_backend("kokoro").__class__
+        return ctor()
+    if backend_name == "vibevoice":
+        ctor = globals().get("VibeVoiceTTS") or get_tts_backend("vibevoice").__class__
+        return ctor()
+    raise ValueError(f"Unsupported TTS backend: {name}")
 
 
 def _record_step(metrics: list[dict[str, Any]], name: str, *, start_time: float | None = None, tokens: int | None = None, chars: int | None = None) -> float:
@@ -40,6 +54,7 @@ def run_pipeline(
     *,
     llm: Qwen | None = None,
     max_chunks: int = 5,
+    tts_backend: str = "kokoro",
 ) -> dict:
     """Run the local document-to-podcast pipeline on a single source file."""
     source = Path(input_path)
@@ -87,13 +102,37 @@ def run_pipeline(
     (target_dir / "story_blueprint.json").write_text(json.dumps(story_blueprint, ensure_ascii=False, indent=2), encoding="utf-8")
     (target_dir / "plain_english_translation.json").write_text(json.dumps(translated_material, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    dialogue_builder = PodcastDialogue(llm)
+    editor = StoryEditor(llm)
     dialogue_started = time.perf_counter()
-    script = PodcastDialogue(llm).build(plan)
+
+    controller_material = {
+        "title": plan.get("title", source.stem.replace("_", " ").title()),
+        "material": plan.get("material", {}),
+        "story": story_blueprint.get("story", {}),
+        "audience": story_blueprint.get("audience", {}),
+        "teaching": story_blueprint.get("teaching", []),
+    }
+    controller = ConversationController(llm, max_turns=24, agent_names=("HOST", "EXPERT"))
+    script = controller.run(controller_material)
+
+    if not script.get("dialogue") or len(script.get("dialogue", [])) < 2:
+        script = dialogue_builder.build(plan)
+
+    verdict = editor.review(script, story_blueprint)
+    if not verdict["approved"] and len(script.get("dialogue", [])) < 2:
+        for attempt in range(2):
+            regeneration_prompt = editor.build_regeneration_prompt(script, story_blueprint, verdict)
+            script = dialogue_builder.build(plan, regeneration_prompt=regeneration_prompt)
+            verdict = editor.review(script, story_blueprint)
+            if verdict["approved"]:
+                break
+
     script_chars = len(json.dumps(script, ensure_ascii=False))
     _record_step(benchmark_steps, "generate_dialogue", start_time=dialogue_started, tokens=max(1, script_chars // 4), chars=script_chars)
     (target_dir / "podcast_script.json").write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    tts = KokoroTTS()
+    tts = _make_tts_backend(tts_backend)
     audio_files: list[str] = []
     for turn_index, turn in enumerate(script.get("dialogue", []), start=1):
         speaker = str(turn.get("speaker", "HOST")).strip() or "HOST"
@@ -142,6 +181,7 @@ def main() -> None:
         help="Name of the local Qwen3 model variant to use.",
     )
     parser.add_argument("--max-chunks", type=int, default=5, help="Maximum number of chunks to process in v0.1.")
+    parser.add_argument("--tts", choices=["kokoro", "vibevoice"], default="kokoro", help="TTS backend to use for speech synthesis.")
     args = parser.parse_args()
 
     try:
@@ -149,7 +189,7 @@ def main() -> None:
         if not llm.available:
             raise RuntimeError("Qwen model unavailable.")
 
-        result = run_pipeline(args.input, args.output_dir, llm=llm, max_chunks=args.max_chunks)
+        result = run_pipeline(args.input, args.output_dir, llm=llm, max_chunks=args.max_chunks, tts_backend=args.tts)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

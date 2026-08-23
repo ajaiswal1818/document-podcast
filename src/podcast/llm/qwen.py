@@ -26,7 +26,7 @@ class Qwen:
     def __init__(
         self,
         model_name: str | None = None,
-        model_version: str = "Qwen3-8B-4bit",
+        model_version: str = "Qwen3-4B-4bit",
     ) -> None:
         self.model_version = model_version
         self.model_name = model_name or MODEL_VARIANTS.get(model_version, model_version)

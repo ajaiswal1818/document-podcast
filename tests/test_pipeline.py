@@ -164,6 +164,164 @@ def test_story_editor_flags_unstructured_podcast() -> None:
     assert "question" in regen_prompt.lower()
 
 
+def test_story_editor_requires_story_arc_and_takeaway() -> None:
+    editor = StoryEditor(None)
+    script = {
+        "title": "Demo",
+        "dialogue": [
+            {"speaker": "HOST", "text": "Why does this matter?"},
+            {"speaker": "EXPERT", "text": "It is a biological response."},
+        ],
+    }
+    verdict = editor.review(script, {
+        "story": {"central_question": "Why does it matter?"},
+        "audience": {"why_they_should_care": "It changes decision-making."},
+    })
+
+    assert "story_has_arc" in verdict["checks"]
+    assert "story_has_arc" in verdict["failed_checks"]
+    assert "takeaway_is_clear" in verdict["failed_checks"]
+
+
+def test_conversation_controller_uses_stateful_turns() -> None:
+    from podcast.agents.conversational_agent import ConversationalAgent
+    from podcast.conversation.controller import ConversationController, ConversationState
+
+    state = ConversationState("demo topic")
+    state.add_turn("A", "Why does this matter?")
+    state.add_turn("B", "Because the pattern shows a real shift.")
+
+    agent = ConversationalAgent("A", "curious", FakeLLM())
+    response = agent.respond(state, {"main_ideas": ["The shift matters"]})
+
+    assert response["speaker"] == "A"
+    assert response["text"]
+    assert "matter" in response["text"].lower() or "shift" in response["text"].lower()
+    assert "metadata" in response
+    assert "emotion" in response["metadata"]
+    assert "should_continue_topic" in response["metadata"]
+
+    controller = ConversationController(FakeLLM(), max_turns=2)
+    script = controller.run({"title": "Demo", "material": {"main_ideas": ["The shift matters"]}})
+
+    assert script["speakers"] == ["A", "B"]
+    assert len(script["dialogue"]) >= 2
+
+
+def test_run_pipeline_uses_stateful_controller_for_dialogue(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "notes.txt"
+    source.write_text("This is a short document with a clear point.", encoding="utf-8")
+
+    calls: list[str] = []
+
+    class FakeController:
+        def __init__(self, llm, *, max_turns=6, agent_names=("A", "B")) -> None:
+            calls.append("init")
+
+        def run(self, material=None):
+            calls.append("run")
+            return {
+                "title": "Demo",
+                "speakers": ["A", "B"],
+                "dialogue": [
+                    {"speaker": "A", "text": "Why does this matter?"},
+                    {"speaker": "B", "text": "Because the pattern changes the decision."},
+                    {"speaker": "A", "text": "So the real takeaway is the shift in meaning?"},
+                    {"speaker": "B", "text": "Exactly, and that is why it matters."},
+                ],
+            }
+
+    class FakeTTS:
+        def __init__(self):
+            self.voice = "af_heart"
+
+        def synthesize(self, text: str, output_path: str, voice: str | None = None) -> str:
+            sf.write(output_path, [0.0, 0.1, 0.2], 8000)
+            return output_path
+
+    monkeypatch.setattr("podcast.cli.ConversationController", FakeController)
+    monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: FakeTTS())
+    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
+
+    result = run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1)
+
+    assert "run" in calls
+    assert len(result["dialogue"]) >= 4
+
+
+def test_conversational_agent_prompts_for_reaction_before_explaining() -> None:
+    from podcast.agents.conversational_agent import ConversationalAgent
+    from podcast.conversation.controller import ConversationState
+
+    class CaptureLLM:
+        available = True
+        captured = {}
+
+        def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+            self.captured["system"] = system
+            self.captured["user"] = user
+            return '{"speech": "Wait, really?", "intent": "react", "topic": "demo topic", "new_information": false, "question_for_other_agent": "", "needs_research": false, "confidence": 0.9, "conversation_direction": "react", "emotion": "surprised", "should_continue_topic": true}'
+
+    llm = CaptureLLM()
+    agent = ConversationalAgent("A", "curious", llm)
+    state = ConversationState("demo topic")
+    state.add_turn("B", "The pattern changes the decision.")
+
+    agent.respond(state, {"main_ideas": ["The pattern matters"]})
+
+    assert "React to what the other person just said before deciding what you want to say" in llm.captured["system"]
+    assert "Do NOT always explain" in llm.captured["system"]
+
+
+def test_conversation_state_allows_longer_podcast_blocks() -> None:
+    from podcast.conversation.controller import ConversationState
+
+    state = ConversationState("demo topic")
+    for i in range(16):
+        state.add_turn("A" if i % 2 == 0 else "B", f"Turn {i + 1} keeps the conversation moving.")
+
+    assert len(state.turns) == 16
+
+
+def test_conversational_agent_hides_internal_metadata_from_prompt() -> None:
+    from podcast.agents.conversational_agent import ConversationalAgent
+    from podcast.conversation.controller import ConversationState
+
+    class CaptureLLM:
+        available = True
+        captured = {}
+
+        def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+            self.captured["system"] = system
+            self.captured["user"] = user
+            return '{"speech": "Wait, really?", "intent": "react", "topic": "demo topic", "new_information": false, "question_for_other_agent": "", "needs_research": false, "confidence": 0.9, "conversation_direction": "react", "emotion": "surprised", "should_continue_topic": true}'
+
+    llm = CaptureLLM()
+    agent = ConversationalAgent("A", "curious", llm)
+    state = ConversationState("demo topic")
+    state.add_turn("B", "The pattern changes the decision.")
+
+    agent.respond(state, {
+        "main_ideas": [{"value": "The pattern matters", "source": {"chunk": 1}}],
+        "facts": [{"value": "The trial showed a clear shift.", "source": {"chunk": 2}}],
+    })
+
+    assert "\"value\"" not in llm.captured["user"]
+    assert "chunk" not in llm.captured["user"]
+    assert "The pattern matters" in llm.captured["user"]
+
+
+def test_research_agent_stores_sources_for_agent_requests() -> None:
+    from podcast.research.researcher import ResearchAgent
+
+    researcher = ResearchAgent()
+    result = researcher.lookup("diagnostic mismatch", {"main_ideas": ["The pattern matters"]})
+
+    assert result["topic"] == "diagnostic mismatch"
+    assert result["sources"]
+    assert result["sources"][0]["source"]
+
+
 def test_run_pipeline_regenerates_when_story_editor_rejects(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "notes.txt"
     source.write_text("This is a short document with a clear point.", encoding="utf-8")
@@ -193,6 +351,13 @@ def test_run_pipeline_regenerates_when_story_editor_rejects(tmp_path: Path, monk
     run_pipeline(str(source), output_dir=tmp_path / "output", llm=llm, max_chunks=1)
 
     assert llm.calls >= 2
+
+
+def test_tts_backend_factory_uses_selected_backend() -> None:
+    from podcast.tts import get_tts_backend
+
+    assert get_tts_backend("kokoro").__class__.__name__ == "KokoroTTS"
+    assert get_tts_backend("vibevoice").__class__.__name__ == "VibeVoiceTTS"
 
 
 def test_run_pipeline_generates_audio_file(tmp_path: Path, monkeypatch) -> None:

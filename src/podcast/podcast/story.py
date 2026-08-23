@@ -73,7 +73,7 @@ Rules:
     response = llm.generate(
         "You are a story architect for scientific content.",
         prompt,
-        max_tokens=3000,
+        max_tokens=10000,
     )
     blueprint = json.loads(response)
     if not isinstance(blueprint, dict):

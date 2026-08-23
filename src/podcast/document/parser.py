@@ -2,13 +2,53 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import fitz
 
 
+def _normalize_whitespace(text: str) -> str:
+    """Collapse repeated whitespace while preserving paragraph boundaries."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", " ", text)
+    text = re.sub(r"[\t\u00a0]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r" +", " ", text)
+    text = re.sub(r"\n +", "\n", text)
+    text = re.sub(r" +\n", "\n", text)
+    return text.strip()
+
+
+def normalize_document_text(text: str) -> str:
+    """Clean extracted text for downstream analysis and conversation generation."""
+    cleaned = _normalize_whitespace(text)
+    sections: list[str] = []
+    current: list[str] = []
+    for line in cleaned.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if len(stripped) < 5 and stripped.isupper():
+            if current:
+                sections.append("\n".join(current))
+                current = []
+            sections.append(stripped)
+            continue
+        if re.fullmatch(r"[-=]{3,}", stripped):
+            if current:
+                sections.append("\n".join(current))
+                current = []
+            continue
+        current.append(stripped)
+    if current:
+        sections.append("\n".join(current))
+    return "\n\n".join(section.strip() for section in sections if section.strip())
+
+
 def extract_pdf(path: str | Path) -> str:
-    """Extract plain text from a PDF document page by page."""
+    """Extract plain text from a PDF document page by page and normalize it."""
     pdf_path = Path(path)
     document = fitz.open(pdf_path)
 
@@ -19,7 +59,8 @@ def extract_pdf(path: str | Path) -> str:
             pages.append(f"\n--- PAGE {page_number} ---\n{text}")
 
     document.close()
-    return "\n".join(pages)
+    cleaned = normalize_document_text("\n".join(pages))
+    return cleaned
 
 
 def chunk_text(text: str, max_chars: int = 12000) -> list[str]:
@@ -64,4 +105,4 @@ class DocumentParser:
         if self.source_path.suffix.lower() == ".pdf":
             return extract_pdf(self.source_path)
 
-        return self.source_path.read_text(encoding="utf-8")
+        return normalize_document_text(self.source_path.read_text(encoding="utf-8"))

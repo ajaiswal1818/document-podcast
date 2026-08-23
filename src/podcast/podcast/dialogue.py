@@ -58,7 +58,7 @@ class PodcastDialogue:
             raise ValueError("Model response did not include a dialogue list.")
         return preferred
 
-    def build(self, plan: Any) -> dict[str, Any]:
+    def build(self, plan: Any, *, regeneration_prompt: str | None = None) -> dict[str, Any]:
         """Ask the LLM to produce a realistic two-speaker podcast conversation that follows the story blueprint."""
         if self.llm is None or not getattr(self.llm, "available", False):
             raise RuntimeError("Qwen model unavailable.")
@@ -121,18 +121,21 @@ Requirements:
 }}
 """
 
+        if regeneration_prompt:
+            prompt = f"{regeneration_prompt}\n\nUse the original goals and source material below.\n\n{prompt}"
+
         if hasattr(self.llm, "generate_json"):
             script = self.llm.generate_json(
                 "You are a careful podcast script writer.",
                 prompt,
-                max_tokens=3000,
+                max_tokens=10000,
                 retries=2,
             )
         else:
             response = self.llm.generate(
                 "You are a careful podcast script writer.",
                 prompt,
-                max_tokens=3000,
+                max_tokens=10000,
             )
             script = self._extract_json(response)
 

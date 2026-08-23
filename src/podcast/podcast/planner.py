@@ -104,7 +104,7 @@ Important:
     response = llm.generate(
         SYSTEM_PROMPT,
         prompt,
-        max_tokens=2000,
+        max_tokens=10000,
     )
     return _extract_json_object(response)
 
@@ -137,7 +137,7 @@ Rules:
     response = llm.generate(
         "You translate dense science into plain English for field teams.",
         prompt,
-        max_tokens=2000,
+        max_tokens=10000,
     )
     translated = _extract_json_object(response)
     if not isinstance(translated, dict):
