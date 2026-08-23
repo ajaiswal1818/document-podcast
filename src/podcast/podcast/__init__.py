@@ -1,6 +1,12 @@
 """Podcast generation logic."""
 
 from .dialogue import PodcastDialogue
-from .planner import PodcastPlanner
+from .planner import PodcastPlan, PodcastPlanner, analyse_chunk, build_episode_plan
 
-__all__ = ["PodcastPlanner", "PodcastDialogue"]
+__all__ = [
+    "PodcastPlan",
+    "PodcastPlanner",
+    "PodcastDialogue",
+    "analyse_chunk",
+    "build_episode_plan",
+]

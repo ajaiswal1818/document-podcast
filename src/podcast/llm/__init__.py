@@ -1,5 +1,5 @@
 """LLM integrations."""
 
-from .qwen import QwenClient
+from .qwen import Qwen
 
-__all__ = ["QwenClient"]
+__all__ = ["Qwen"]
