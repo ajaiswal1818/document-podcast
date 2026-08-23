@@ -13,7 +13,9 @@ from typing import Any
 from podcast.document.parser import DocumentParser, chunk_text
 from podcast.llm.qwen import Qwen
 from podcast.podcast.dialogue import PodcastDialogue
-from podcast.podcast.planner import analyse_chunk, build_episode_plan
+from podcast.podcast.editor import StoryEditor
+from podcast.podcast.planner import analyse_chunk, build_episode_plan, translate_technical_terms
+from podcast.podcast.story import build_story_blueprint
 from podcast.tts.kokoro import KokoroTTS, assemble_audio_files
 
 
@@ -68,9 +70,22 @@ def run_pipeline(
         _record_step(benchmark_steps, "analyse_chunk", start_time=chunk_start, tokens=tokens, chars=len(chunk))
         analyses.append(analysis)
 
-    plan = build_episode_plan(analyses, title=source.stem.replace("_", " ").title())
+    plan = build_episode_plan(analyses, title=source.stem.replace("_", " ").title(), llm=llm)
+    story_blueprint = plan.get("story") or build_story_blueprint(llm, analyses, title=source.stem.replace("_", " ").title())
+    translated_material = translate_technical_terms(llm, plan.get("material", {}))
+    plan["material"] = {
+        **plan.get("material", {}),
+        "plain_english_summary": translated_material.get("plain_english_summary", ""),
+        "translated_facts": translated_material.get("facts", []),
+        "translated_main_ideas": translated_material.get("main_ideas", []),
+    }
+    plan["story"] = story_blueprint.get("story", plan.get("story", {}))
+    plan["audience"] = story_blueprint.get("audience", plan.get("audience", {}))
+    plan["teaching"] = story_blueprint.get("teaching", plan.get("teaching", []))
     (target_dir / "document_analysis.json").write_text(json.dumps(analyses, ensure_ascii=False, indent=2), encoding="utf-8")
     (target_dir / "episode_plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    (target_dir / "story_blueprint.json").write_text(json.dumps(story_blueprint, ensure_ascii=False, indent=2), encoding="utf-8")
+    (target_dir / "plain_english_translation.json").write_text(json.dumps(translated_material, ensure_ascii=False, indent=2), encoding="utf-8")
 
     dialogue_started = time.perf_counter()
     script = PodcastDialogue(llm).build(plan)

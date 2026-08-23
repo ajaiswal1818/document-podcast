@@ -59,31 +59,56 @@ class PodcastDialogue:
         return preferred
 
     def build(self, plan: Any) -> dict[str, Any]:
-        """Ask the LLM to produce a realistic two-speaker podcast conversation."""
+        """Ask the LLM to produce a realistic two-speaker podcast conversation that follows the story blueprint."""
         if self.llm is None or not getattr(self.llm, "available", False):
             raise RuntimeError("Qwen model unavailable.")
 
         title = "Untitled Podcast"
         material: dict[str, Any] = {}
+        story_blueprint: dict[str, Any] = {}
         if isinstance(plan, dict):
             title = str(plan.get("title", title))
             material = plan.get("material", {})
+            story_blueprint = plan.get("story", {}) or {}
+            audience = plan.get("audience", {}) or {}
+            teaching = plan.get("teaching", []) or []
+        else:
+            audience = {}
+            teaching = []
 
         prompt = f"""
-You are producing a podcast script from source material.
+You are producing a podcast story for a healthcare / biotech marketing field audience.
 
 Title: {title}
+
+Audience: a non-biologist field agent who needs to understand the science quickly and confidently.
+Goal: tell the most compelling story that can honestly be drawn from this material, not a generic summary.
+
+Story Blueprint:
+{json.dumps(story_blueprint, ensure_ascii=False, indent=2)}
+
+Audience Model:
+{json.dumps(audience, ensure_ascii=False, indent=2)}
+
+Teaching Priorities:
+{json.dumps(teaching, ensure_ascii=False, indent=2)}
 
 Material:
 {json.dumps(material, ensure_ascii=False, indent=2)}
 
 Create a realistic two-person conversation with HOST and EXPERT.
 
-Rules:
+Requirements:
 - Every factual claim must be supported by the supplied material.
-- Do not invent data.
-- Keep it natural and engaging.
-- Use a conversation structure with a hook, explanation, key facts, examples, and a final takeaway.
+- The script must follow the story blueprint, especially the central question, tension, turning point, and takeaway.
+- The HOST should ask the kinds of questions a real listener would ask before the science makes sense.
+- The EXPERT should explain complex ideas simply and clearly, without talking like a textbook.
+- Translate technical biology and medical terms into plain English for a lay audience.
+- Keep it conversational and human, with a natural rhythm: HOST question, brief expert answer, then a follow-up question.
+- Use a structure that matches the blueprint instead of generic sections.
+- If the source is complex or technical, explain it in simple analogies without losing meaning.
+- Do not invent data, product claims, or unsupported conclusions.
+- Make the numbers meaningful by explaining why they matter, not just stating them.
 - Output valid JSON in this exact shape:
 
 {{

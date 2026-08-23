@@ -7,7 +7,8 @@ import soundfile as sf
 from podcast.cli import run_pipeline
 from podcast.document.parser import DocumentParser, chunk_text, extract_pdf
 from podcast.podcast.dialogue import PodcastDialogue
-from podcast.podcast.planner import build_episode_plan
+from podcast.podcast.editor import StoryEditor
+from podcast.podcast.planner import build_episode_plan, build_story_blueprint, translate_technical_terms
 from podcast.tts.kokoro import assemble_audio_files
 
 
@@ -116,6 +117,82 @@ def test_assemble_audio_files_writes_podcast_wav(tmp_path: Path) -> None:
     assert assembled == str(out_path)
     assert out_path.exists()
     assert out_path.stat().st_size > 0
+
+
+def test_translate_technical_terms_to_plain_english() -> None:
+    class FakeTranslatorLLM:
+        available = True
+
+        def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+            return '{"plain_english_summary": "This means the immune system is reacting more strongly than before.", "facts": ["The immune response is stronger than before."], "main_ideas": ["The body is reacting more strongly."]}'
+
+    result = translate_technical_terms(FakeTranslatorLLM(), {
+        "facts": ["The cytokine signaling pathway increased in the immune response."],
+        "main_ideas": ["Immune response increased."],
+    })
+
+    assert "plain_english_summary" in result
+    assert "immune" in result["plain_english_summary"].lower()
+    assert result["facts"][0]
+
+
+def test_story_blueprint_has_audience_and_teaching_layers() -> None:
+    class FakeStoryLLM:
+        available = True
+
+        def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+            return '{"story": {"central_question": "Why does response improve?", "hook": "A small change changes outcomes.", "problem": "People do not understand why it matters.", "tension": "The science looks complex.", "turning_point": "The trial changed the response curve.", "resolution": "The mechanism is clearer.", "big_takeaway": "The result matters for adoption."}, "audience": {"what_they_already_know": ["a treatment exists"], "what_will_confuse_them": ["what the number means"], "what_they_need_to_remember": ["response improved"], "why_they_should_care": "It changes how quickly people can act."}, "teaching": [{"concept": "response rate", "explanation": "How many patients improved.", "analogy": "It is like conversion rate.", "source": {"chunk": 1}}]}'
+
+    blueprint = build_story_blueprint(FakeStoryLLM(), [{"facts": ["A trial showed a response increase."], "main_ideas": ["The response improved."]}], title="Demo")
+
+    assert "story" in blueprint
+    assert blueprint["story"]["central_question"]
+    assert blueprint["audience"]["what_will_confuse_them"]
+    assert blueprint["teaching"][0]["analogy"]
+
+
+def test_story_editor_flags_unstructured_podcast() -> None:
+    editor = StoryEditor(None)
+    script = {"title": "Demo", "dialogue": [{"speaker": "HOST", "text": "Today we talk about X."}, {"speaker": "EXPERT", "text": "The study showed a result."}]}
+    verdict = editor.review(script, {"story": {"central_question": "Why does it matter?"}})
+
+    assert "approved" in verdict
+    assert isinstance(verdict["approved"], bool)
+    assert verdict["failed_checks"]
+
+    regen_prompt = editor.build_regeneration_prompt(script, {"story": {"central_question": "Why does it matter?"}}, verdict)
+    assert "question" in regen_prompt.lower()
+
+
+def test_run_pipeline_regenerates_when_story_editor_rejects(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "notes.txt"
+    source.write_text("This is a short document with a clear point.", encoding="utf-8")
+
+    class FakeRegeneratingLLM(FakeLLM):
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                return '{"title": "Demo", "speakers": ["HOST", "EXPERT"], "dialogue": [{"speaker": "HOST", "text": "Today we talk about X."}, {"speaker": "EXPERT", "text": "The study showed a result."}]}'
+            return '{"title": "Demo", "speakers": ["HOST", "EXPERT"], "dialogue": [{"speaker": "HOST", "text": "What problem are we trying to solve here?"}, {"speaker": "EXPERT", "text": "The treatment improved response by 37%, which means more patients improved than under standard care."}]}'
+
+    class FakeTTS:
+        def __init__(self):
+            self.voice = "af_heart"
+
+        def synthesize(self, text: str, output_path: str, voice: str | None = None) -> str:
+            sf.write(output_path, [0.0, 0.1, 0.2], 8000)
+            return output_path
+
+    llm = FakeRegeneratingLLM()
+    monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: FakeTTS())
+    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
+
+    run_pipeline(str(source), output_dir=tmp_path / "output", llm=llm, max_chunks=1)
+
+    assert llm.calls >= 2
 
 
 def test_run_pipeline_generates_audio_file(tmp_path: Path, monkeypatch) -> None:
