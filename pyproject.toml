@@ -1,0 +1,20 @@
+[project]
+name = "document-podcast"
+version = "0.1.0"
+description = "Generate podcast audio from source documents."
+readme = "README.md"
+authors = [
+    { name = "Abhishek Jaiswal", email = "ajaiswal9043@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+document-podcast = "podcast.cli:main"
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
