@@ -1,10 +1,26 @@
 # Python-generated files
 __pycache__/
-*.py[oc]
+*.py[cod]
+*.pyo
+*.pyd
 build/
 dist/
 wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv/
+.env
+
+# macOS
+.DS_Store
+
+# Generated project data
+models/
+data/input/*
+data/output/*
+
+# Keep directory structure in git
+!data/input/.gitkeep
+!data/output/.gitkeep
+!models/.gitkeep

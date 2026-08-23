@@ -87,22 +87,30 @@ Return JSON in this format:
 
 
 def build_episode_plan(analyses: list[dict], title: str = "Local Podcast Episode") -> dict:
-    """Merge document analyses into a single episode plan JSON."""
-    merged: dict[str, list[str]] = {
-        "main_ideas": [],
-        "facts": [],
-        "numbers": [],
-        "arguments": [],
-        "examples": [],
-        "interesting_points": [],
-        "conclusions": [],
-    }
+    """Merge document analyses into a single episode plan JSON with source attribution."""
+    material_keys = [
+        "main_ideas",
+        "facts",
+        "numbers",
+        "arguments",
+        "examples",
+        "interesting_points",
+        "conclusions",
+    ]
+    merged: dict[str, list[dict]] = {key: [] for key in material_keys}
 
-    for analysis in analyses:
-        for key, values in merged.items():
+    for chunk_index, analysis in enumerate(analyses, start=1):
+        for key in material_keys:
             items = analysis.get(key, [])
-            if isinstance(items, list):
-                merged[key].extend(str(item) for item in items)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict):
+                    payload = dict(item)
+                    payload.setdefault("source", {"chunk": chunk_index})
+                    merged[key].append(payload)
+                else:
+                    merged[key].append({"value": str(item), "source": {"chunk": chunk_index}})
 
     return {
         "title": title,
