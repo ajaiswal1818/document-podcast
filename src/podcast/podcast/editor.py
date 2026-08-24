@@ -21,7 +21,13 @@ class StoryEditor:
     def __init__(self, llm: Any | None = None) -> None:
         self.llm = llm
 
-    def review(self, script: dict[str, Any], blueprint: dict[str, Any] | None = None) -> dict[str, Any]:
+    def review(
+        self,
+        script: dict[str, Any],
+        blueprint: dict[str, Any] | None = None,
+        *,
+        target_words: int | None = None,
+    ) -> dict[str, Any]:
         """Evaluate whether the script follows a real story arc and explains the issue for a lay audience."""
         blueprint = blueprint or {}
         story = blueprint.get("story", {}) if isinstance(blueprint, dict) else {}
@@ -69,9 +75,13 @@ class StoryEditor:
             for turn in dialogue
             if isinstance(turn, dict) and str(turn.get("text", "")).strip()
         ]
-        unique_texts = {text.lower() for text in turn_texts}
+        # Short back-channel turns ("Right.", "Exactly.") legitimately repeat in
+        # natural conversation; judge diversity on substantive turns when possible.
+        substantive_texts = [text for text in turn_texts if len(text.split()) > 5]
+        diversity_basis = substantive_texts if len(substantive_texts) >= 4 else turn_texts
+        unique_texts = {text.lower() for text in diversity_basis}
         dialogue_is_diverse = (
-            len(unique_texts) / len(turn_texts) >= 0.6 if len(turn_texts) > 3 else bool(turn_texts)
+            len(unique_texts) / len(diversity_basis) >= 0.6 if len(diversity_basis) > 3 else bool(turn_texts)
         )
         no_metadata_leakage = not any(
             re.search(pattern, text, flags=re.IGNORECASE) for text in turn_texts for pattern in _LEAK_PATTERNS
@@ -88,6 +98,9 @@ class StoryEditor:
             "dialogue_is_diverse": dialogue_is_diverse,
             "no_metadata_leakage": no_metadata_leakage,
         }
+        if target_words:
+            total_words = sum(len(text.split()) for text in turn_texts)
+            checks["meets_target_length"] = total_words >= int(target_words * 0.75)
 
         failed_checks = [name for name, passed in checks.items() if not passed]
         approved = not failed_checks
@@ -124,6 +137,11 @@ class StoryEditor:
             questions.append("Every turn must say something new; do not repeat the same sentence or restate the same point across turns.")
         if "no_metadata_leakage" in failed:
             questions.append("Remove all internal bookkeeping from the spoken text: no source references, chunk numbers, ids, scores, or dict/JSON fragments.")
+        if "meets_target_length" in failed:
+            questions.append(
+                "The conversation is far too short for the episode. Expand it substantially: go deeper on each concept with "
+                "examples and analogies, add follow-up questions, and cover every teaching point from the blueprint."
+            )
 
         if not questions:
             return "Keep the current story and tighten the wording, but do not change the core structure."

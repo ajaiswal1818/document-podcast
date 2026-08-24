@@ -17,6 +17,7 @@ class ConversationState:
         self.turns: list[dict[str, str]] = []
         self.facts: list[str] = []
         self.open_questions: list[str] = []
+        self.current_focus = ""
 
     @property
     def summary(self) -> str:
@@ -41,6 +42,7 @@ class ConversationState:
             "summary": self.summary,
             "recent_turns": self.turns[-8:],
             "speaker": speaker,
+            "current_focus": self.current_focus,
             "safe_fact_context": render_evidence_for_agent(
                 [{"claim": fact} for fact in self.facts]
             ),
@@ -50,15 +52,59 @@ class ConversationState:
 class ConversationController:
     """Coordinates a small two-agent discussion into a podcast script."""
 
-    def __init__(self, llm: Any, *, max_turns: int = 24, agent_names: tuple[str, str] = ("A", "B")) -> None:
+    def __init__(
+        self,
+        llm: Any,
+        *,
+        max_turns: int = 24,
+        agent_names: tuple[str, str] = ("A", "B"),
+        target_words: int | None = None,
+    ) -> None:
         self.llm = llm
         self.max_turns = max_turns
         self.agent_names = agent_names
+        self.target_words = target_words
         self.agents = [
-            ConversationalAgent(agent_names[0], "curious and probing", llm),
-            ConversationalAgent(agent_names[1], "calm and explanatory", llm),
+            ConversationalAgent(
+                agent_names[0],
+                "curious and probing; asks short pointed questions and reacts briefly to keep the conversation moving",
+                llm,
+            ),
+            ConversationalAgent(
+                agent_names[1],
+                "calm and explanatory; gives generous, example-rich explanations with analogies a non-expert can follow",
+                llm,
+            ),
         ]
         self.research_agent = ResearchAgent()
+
+    @staticmethod
+    def _build_focus_plan(material: dict[str, Any]) -> list[str]:
+        """Build an ordered list of conversation segment foci from the story arc and teaching points."""
+        foci: list[str] = []
+        story = material.get("story", {}) if isinstance(material.get("story"), dict) else {}
+        for key in ("hook", "problem", "tension", "turning_point", "resolution", "big_takeaway"):
+            value = story.get(key)
+            if isinstance(value, str) and value.strip():
+                foci.append(f"{key.replace('_', ' ').title()}: {value.strip()}")
+
+        teaching = material.get("teaching", [])
+        if isinstance(teaching, list):
+            for item in teaching:
+                if isinstance(item, dict) and str(item.get("concept", "")).strip():
+                    concept = str(item["concept"]).strip()
+                    explanation = str(item.get("explanation", "")).strip()
+                    analogy = str(item.get("analogy", "")).strip()
+                    focus = f"Teach the concept '{concept}'"
+                    if explanation:
+                        focus += f": {explanation}"
+                    if analogy:
+                        focus += f" (a useful analogy: {analogy})"
+                    foci.append(focus)
+
+        if not foci:
+            foci = ["Explore the main findings, what they mean in plain language, and why they matter."]
+        return foci
 
     def run(self, material: dict[str, Any] | None = None) -> dict[str, Any]:
         title = "Demo"
@@ -78,12 +124,32 @@ class ConversationController:
         except Exception:
             pass
 
+        foci = self._build_focus_plan(source_material if isinstance(source_material, dict) else {})
+        target_words = self.target_words
+        turn_cap = self.max_turns if not target_words else max(self.max_turns, target_words // 8)
+
+        total_words = 0
         current_index = 0
-        for _ in range(self.max_turns):
+        for turn_count in range(turn_cap):
+            if target_words:
+                if total_words >= target_words:
+                    break
+                progress = total_words / target_words
+                if progress >= 0.92:
+                    state.current_focus = (
+                        "Wrap up the episode: land the big takeaway, make clear why it matters, "
+                        "and close the conversation naturally."
+                    )
+                else:
+                    state.current_focus = foci[min(len(foci) - 1, int(progress * len(foci)))]
+            else:
+                state.current_focus = foci[min(len(foci) - 1, (turn_count * len(foci)) // max(1, self.max_turns))]
+
             agent = self.agents[current_index]
             response = agent.respond(state, source_material if isinstance(source_material, dict) else base_material)
             speech = response.get("text") or response.get("speech") or ""
             state.add_turn(agent.name, speech)
+            total_words += len(speech.split())
             current_index = 1 - current_index
 
         return {

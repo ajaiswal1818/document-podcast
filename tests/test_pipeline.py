@@ -236,11 +236,19 @@ def test_run_pipeline_uses_stateful_controller_for_dialogue(tmp_path: Path, monk
             sf.write(output_path, [0.0, 0.1, 0.2], 8000)
             return output_path
 
+    class FailingSceneWriter:
+        def __init__(self, llm) -> None:
+            pass
+
+        def build(self, plan, *, target_words=2000):
+            raise ValueError("scene generation unavailable")
+
+    monkeypatch.setattr("podcast.cli.SceneScriptWriter", FailingSceneWriter)
     monkeypatch.setattr("podcast.cli.ConversationController", FakeController)
     monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: FakeTTS())
     monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
 
-    result = run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1)
+    result = run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1, research=False)
 
     assert "run" in calls
     assert len(result["dialogue"]) >= 4
@@ -328,15 +336,21 @@ def test_research_agent_fetches_real_web_evidence(monkeypatch) -> None:
         def read(self):
             return self.payload
 
-    def fake_urlopen(url, timeout=10):
-        assert "diagnostic+mismatch" in str(url)
+    def fake_urlopen(request, timeout=10):
+        assert "diagnostic+mismatch" in request.full_url
         return FakeResponse({
-            "AbstractText": "The mismatch pattern is often caused by a delayed clue.",
-            "AbstractSource": "Nature Medicine",
-            "AbstractURL": "https://example.com/mismatch",
-            "RelatedTopics": [
-                {"Text": "Delayed clue can change the diagnosis.", "FirstURL": "https://example.com/first"},
-            ],
+            "resultList": {
+                "result": [
+                    {
+                        "title": "Diagnostic mismatch in clinical practice",
+                        "abstractText": "The mismatch pattern is often caused by a delayed clue.",
+                        "doi": "10.1000/mismatch",
+                        "isOpenAccess": "N",
+                        "pubYear": "2024",
+                        "authorString": "Doe J",
+                    }
+                ]
+            }
         })
 
     monkeypatch.setattr("podcast.research.researcher.urlopen", fake_urlopen)
@@ -346,8 +360,48 @@ def test_research_agent_fetches_real_web_evidence(monkeypatch) -> None:
 
     assert result["topic"] == "diagnostic mismatch"
     assert result["findings"]
-    assert result["findings"][0]["url"] == "https://example.com/mismatch"
-    assert result["findings"][0]["source_title"] == "Nature Medicine"
+    assert result["findings"][0]["url"] == "https://doi.org/10.1000/mismatch"
+    assert result["findings"][0]["source_title"] == "Diagnostic mismatch in clinical practice"
+    assert "delayed clue" in result["findings"][0]["claim"]
+
+
+def test_scene_writer_builds_multi_section_script() -> None:
+    from podcast.podcast.scenes import SceneScriptWriter
+
+    class FakeSceneLLM:
+        available = True
+
+        def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+            if "outline" in user.lower() and "running_metaphor" in user:
+                return (
+                    '{"running_metaphor": "a locked room mystery", "sections": ['
+                    '{"title": "Cold open", "goal": "start in the scene", "beats": ["the belly"], "target_words": 100},'
+                    '{"title": "Landing it", "goal": "close", "beats": [], "target_words": 100}]}'
+                )
+            return (
+                '{"dialogue": [{"speaker": "HOST", "text": "Her belly was massive, and yet she felt no pain at all."},'
+                '{"speaker": "EXPERT", "text": "Right. And that contradiction is exactly where this mystery starts."}]}'
+            )
+
+    writer = SceneScriptWriter(FakeSceneLLM())
+    script = writer.build({"title": "Demo", "story": {}, "teaching": [], "material": {"main_ideas": ["The case"]}}, target_words=200)
+
+    assert script["speakers"] == ["HOST", "EXPERT"]
+    assert len(script["dialogue"]) == 4
+    assert script["outline"]["running_metaphor"] == "a locked room mystery"
+    assert all(turn["speaker"] in {"HOST", "EXPERT"} for turn in script["dialogue"])
+
+
+def test_research_agent_ranks_results_by_title_overlap() -> None:
+    from podcast.research.researcher import ResearchAgent
+
+    agent = ResearchAgent()
+    query = "Chronic ascites systemic lupus erythematosus case report"
+    good = agent._title_overlap(query, "Chronic ascites as the initial presentation of systemic lupus erythematosus")
+    bad = agent._title_overlap(query, "Proceedings of the 32nd European Paediatric Rheumatology Congress")
+
+    assert good > 0.5
+    assert bad < 0.3
 
 
 def test_research_agent_stores_sources_for_agent_requests() -> None:
@@ -417,7 +471,7 @@ def test_run_pipeline_regenerates_when_story_editor_rejects(tmp_path: Path, monk
     monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: FakeTTS())
     monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
 
-    run_pipeline(str(source), output_dir=tmp_path / "output", llm=llm, max_chunks=1)
+    run_pipeline(str(source), output_dir=tmp_path / "output", llm=llm, max_chunks=1, research=False)
 
     assert llm.calls >= 2
 
@@ -447,7 +501,7 @@ def test_run_pipeline_generates_audio_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: fake_tts)
     monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
 
-    result = run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1)
+    result = run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1, research=False)
 
     assert result["title"] == "Demo"
     assert fake_tts.calls
@@ -469,7 +523,7 @@ def test_run_pipeline_records_benchmark_metrics(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: FakeTTS())
     monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
 
-    run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1)
+    run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1, research=False)
 
     benchmark_path = tmp_path / "output" / "notes" / "benchmark.json"
     assert benchmark_path.exists()

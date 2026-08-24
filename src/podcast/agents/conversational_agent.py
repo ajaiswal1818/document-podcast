@@ -135,10 +135,13 @@ class ConversationalAgent:
             "Do not repeat points that have already been made; move the conversation forward. "
             f"Reply with ONLY the words {self.name} speaks next - no JSON, no quotes, no speaker label, no stage directions."
         )
+        focus = str(context.get("current_focus") or "").strip()
+        focus_line = f"Current segment focus (steer the conversation here):\n{focus}\n\n" if focus else ""
         user_prompt = (
             f"Topic: {context['topic']}\n\n"
             f"Evidence you can draw on:\n{evidence}\n\n"
             f"Extra facts gathered during the conversation:\n{context.get('safe_fact_context', 'None yet.')}\n\n"
+            f"{focus_line}"
             f"Conversation so far:\n{transcript}\n\n"
             f"What does {self.name} say next? Reply with the spoken words only."
         )
@@ -150,8 +153,11 @@ class ConversationalAgent:
         if not text:
             text = self._fallback_text(state, material)
 
-        recent_texts = {str(turn.get("text", "")).strip().lower() for turn in recent_turns}
-        if text.strip().lower() in recent_texts:
-            text = self._fallback_text(state, material)
+        # Repeating a substantive turn is degeneration, but short back-channels
+        # ("Right.", "Exactly.") repeat naturally and are allowed through.
+        if len(text.split()) > 5:
+            recent_texts = {str(turn.get("text", "")).strip().lower() for turn in recent_turns}
+            if text.strip().lower() in recent_texts:
+                text = self._fallback_text(state, material)
 
         return {"speaker": self.name, "text": text, "metadata": {"persona": self.persona}}

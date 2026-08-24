@@ -14,8 +14,25 @@ except Exception:  # pragma: no cover
     KokoroRuntime = None
 
 
-def assemble_audio_files(audio_files: Sequence[str], output_path: str) -> str:
-    """Concatenate multiple WAV clips into a single output file."""
+def _normalize_clip(data: np.ndarray, target_rms: float = 0.06) -> np.ndarray:
+    """Bring a clip to a consistent perceived loudness without clipping."""
+    rms = float(np.sqrt(np.mean(np.square(data)))) if data.size else 0.0
+    if rms > 1e-6:
+        data = data * (target_rms / rms)
+    peak = float(np.max(np.abs(data))) if data.size else 0.0
+    if peak > 0.95:
+        data = data * (0.95 / peak)
+    return data.astype(np.float32, copy=False)
+
+
+def assemble_audio_files(
+    audio_files: Sequence[str],
+    output_path: str,
+    *,
+    gap_seconds: float = 0.35,
+    normalize: bool = True,
+) -> str:
+    """Concatenate WAV clips with natural inter-turn pauses and consistent loudness."""
     if not audio_files:
         raise ValueError("No audio files provided to assemble.")
 
@@ -35,12 +52,21 @@ def assemble_audio_files(audio_files: Sequence[str], output_path: str) -> str:
             channels = data.shape[1]
         elif data.shape[1] != channels:
             raise ValueError("Audio files have inconsistent channel counts.")
+        if normalize:
+            data = _normalize_clip(data)
         arrays.append(data.astype(np.float32, copy=False))
 
     if sample_rate is None or not arrays:
         raise ValueError("No valid audio data could be assembled.")
 
-    combined = np.concatenate(arrays, axis=0)
+    gap = np.zeros((int(sample_rate * max(0.0, gap_seconds)), channels or 1), dtype=np.float32)
+    segments: list[np.ndarray] = []
+    for index, clip in enumerate(arrays):
+        if index > 0 and gap.size:
+            segments.append(gap)
+        segments.append(clip)
+
+    combined = np.concatenate(segments, axis=0)
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(target), combined, sample_rate)

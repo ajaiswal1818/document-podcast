@@ -17,7 +17,9 @@ from podcast.llm.qwen import Qwen
 from podcast.podcast.dialogue import PodcastDialogue
 from podcast.podcast.editor import StoryEditor
 from podcast.podcast.planner import analyse_chunk, build_episode_plan, translate_technical_terms
+from podcast.podcast.scenes import SceneScriptWriter
 from podcast.podcast.story import build_story_blueprint
+from podcast.research.researcher import ResearchAgent
 from podcast.tts import VibeVoiceTTS, get_tts_backend
 from podcast.tts.kokoro import KokoroTTS, assemble_audio_files
 
@@ -31,6 +33,8 @@ def _make_tts_backend(name: str) -> Any:
     if backend_name == "vibevoice":
         ctor = globals().get("VibeVoiceTTS") or get_tts_backend("vibevoice").__class__
         return ctor()
+    if backend_name == "dia":
+        return get_tts_backend("dia")
     raise ValueError(f"Unsupported TTS backend: {name}")
 
 
@@ -49,6 +53,9 @@ def _record_step(metrics: list[dict[str, Any]], name: str, *, start_time: float 
     return wall_time
 
 
+SPOKEN_WORDS_PER_MINUTE = 170
+
+
 def run_pipeline(
     input_path: str,
     output_dir: str | Path = "data/output",
@@ -56,6 +63,8 @@ def run_pipeline(
     llm: Qwen | None = None,
     max_chunks: int = 5,
     tts_backend: str = "kokoro",
+    target_minutes: float = 15.0,
+    research: bool = True,
 ) -> dict:
     """Run the local document-to-podcast pipeline on a single source file."""
     source = Path(input_path)
@@ -78,8 +87,28 @@ def run_pipeline(
     if not llm.available:
         raise RuntimeError("Qwen model unavailable.")
 
+    research_report: dict[str, Any] = {}
+    if research:
+        research_started = time.perf_counter()
+        try:
+            research_report = ResearchAgent(llm).research_document(extracted_text)
+        except Exception as exc:
+            print(f"Warning: research retrieval failed, continuing with local material: {exc}", file=sys.stderr)
+        _record_step(benchmark_steps, "research_document", start_time=research_started)
+        if research_report:
+            (target_dir / "research.json").write_text(
+                json.dumps(research_report, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            retrieved = [source.get("title", "?") for source in research_report.get("sources", []) if source.get("has_full_text")]
+            if retrieved:
+                print(f"Research: retrieved full text for {len(retrieved)} paper(s).", file=sys.stderr)
+
+    research_chunks: list[str] = []
+    for full_text in research_report.get("full_texts", []):
+        research_chunks.extend(chunk_text(str(full_text.get("text", ""))))
+
     analyses: list[dict] = []
-    for chunk in chunks[: max_chunks]:
+    for chunk in (chunks[:max_chunks] + research_chunks[:max_chunks]):
         chunk_start = time.perf_counter()
         analysis = analyse_chunk(llm, chunk)
         tokens = max(1, len(str(analysis).split()))
@@ -98,6 +127,15 @@ def run_pipeline(
     plan["story"] = story_blueprint.get("story", plan.get("story", {}))
     plan["audience"] = story_blueprint.get("audience", plan.get("audience", {}))
     plan["teaching"] = story_blueprint.get("teaching", plan.get("teaching", []))
+    if research_report:
+        plan["research"] = {
+            "query": research_report.get("query", ""),
+            "sources": [
+                {key: source.get(key, "") for key in ("title", "authors", "journal", "year", "doi")}
+                for source in research_report.get("sources", [])
+            ],
+            "abstracts": research_report.get("abstracts", []),
+        }
     (target_dir / "document_analysis.json").write_text(json.dumps(analyses, ensure_ascii=False, indent=2), encoding="utf-8")
     (target_dir / "episode_plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     (target_dir / "story_blueprint.json").write_text(json.dumps(story_blueprint, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -114,20 +152,30 @@ def run_pipeline(
         "audience": story_blueprint.get("audience", {}),
         "teaching": story_blueprint.get("teaching", []),
     }
-    controller = ConversationController(llm, max_turns=24, agent_names=("HOST", "EXPERT"))
-    script = controller.run(controller_material)
+    target_words = int(target_minutes * SPOKEN_WORDS_PER_MINUTE) if target_minutes else None
+
+    script: dict[str, Any] | None = None
+    try:
+        script = SceneScriptWriter(llm).build(plan, target_words=target_words or 2000)
+    except Exception as exc:
+        print(f"Warning: scene-based script generation failed, falling back to turn loop: {exc}", file=sys.stderr)
+
+    if not script or len(script.get("dialogue", [])) < 2:
+        controller = ConversationController(llm, max_turns=24, agent_names=("HOST", "EXPERT"))
+        controller.target_words = target_words
+        script = controller.run(controller_material)
 
     if not script.get("dialogue") or len(script.get("dialogue", [])) < 2:
         script = dialogue_builder.build(plan)
 
-    verdict = editor.review(script, story_blueprint)
+    verdict = editor.review(script, story_blueprint, target_words=target_words)
     critical_checks = {"dialogue_is_diverse", "no_metadata_leakage"}
     for _attempt in range(2):
         if verdict["approved"]:
             break
         regeneration_prompt = editor.build_regeneration_prompt(script, story_blueprint, verdict)
         candidate = dialogue_builder.build(plan, regeneration_prompt=regeneration_prompt)
-        candidate_verdict = editor.review(candidate, story_blueprint)
+        candidate_verdict = editor.review(candidate, story_blueprint, target_words=target_words)
         script_is_degenerate = critical_checks & set(verdict["failed_checks"])
         candidate_is_degenerate = critical_checks & set(candidate_verdict["failed_checks"])
         if (script_is_degenerate and not candidate_is_degenerate) or len(
@@ -143,16 +191,27 @@ def run_pipeline(
     tts = _make_tts_backend(tts_backend)
     voice_map = {"HOST": "af_heart", "EXPERT": "am_adam"}
     audio_files: list[str] = []
-    for turn_index, turn in enumerate(script.get("dialogue", []), start=1):
-        speaker = str(turn.get("speaker", "HOST")).strip() or "HOST"
-        text = scrub_speech_text(str(turn.get("text", "")).strip())
-        if not text:
-            continue
-        segment_path = target_dir / f"{speaker.lower()}_{turn_index}.wav"
+    dialogue_turns = script.get("dialogue", [])
+    if hasattr(tts, "synthesize_dialogue"):
         tts_start = time.perf_counter()
-        tts.synthesize(text, str(segment_path), voice=voice_map.get(speaker, "am_adam"))
-        _record_step(benchmark_steps, f"tts_{speaker.lower()}_{turn_index}", start_time=tts_start, chars=len(text))
-        audio_files.append(str(segment_path))
+        audio_files = list(tts.synthesize_dialogue(dialogue_turns, str(target_dir)))
+        _record_step(
+            benchmark_steps,
+            "tts_dialogue",
+            start_time=tts_start,
+            chars=sum(len(str(turn.get("text", ""))) for turn in dialogue_turns),
+        )
+    else:
+        for turn_index, turn in enumerate(dialogue_turns, start=1):
+            speaker = str(turn.get("speaker", "HOST")).strip() or "HOST"
+            text = scrub_speech_text(str(turn.get("text", "")).strip())
+            if not text:
+                continue
+            segment_path = target_dir / f"{speaker.lower()}_{turn_index}.wav"
+            tts_start = time.perf_counter()
+            tts.synthesize(text, str(segment_path), voice=voice_map.get(speaker, "am_adam"))
+            _record_step(benchmark_steps, f"tts_{speaker.lower()}_{turn_index}", start_time=tts_start, chars=len(text))
+            audio_files.append(str(segment_path))
 
     if audio_files:
         final_audio_path = target_dir / "podcast.wav"
@@ -188,7 +247,19 @@ def main() -> None:
         help="Name of the local Qwen3 model variant to use.",
     )
     parser.add_argument("--max-chunks", type=int, default=5, help="Maximum number of chunks to process in v0.1.")
-    parser.add_argument("--tts", choices=["kokoro", "vibevoice"], default="kokoro", help="TTS backend to use for speech synthesis.")
+    parser.add_argument(
+        "--tts",
+        choices=["kokoro", "vibevoice", "dia"],
+        default="kokoro",
+        help="TTS backend. 'dia' synthesizes whole conversations with cross-turn prosody (requires mlx-audio).",
+    )
+    parser.add_argument("--skip-research", action="store_true", help="Skip scholarly research retrieval.")
+    parser.add_argument(
+        "--target-minutes",
+        type=float,
+        default=15.0,
+        help="Target episode duration in minutes; drives how long the conversation runs. Use 0 for the legacy fixed 24-turn behavior.",
+    )
     args = parser.parse_args()
 
     try:
@@ -196,7 +267,15 @@ def main() -> None:
         if not llm.available:
             raise RuntimeError("Qwen model unavailable.")
 
-        result = run_pipeline(args.input, args.output_dir, llm=llm, max_chunks=args.max_chunks, tts_backend=args.tts)
+        result = run_pipeline(
+            args.input,
+            args.output_dir,
+            llm=llm,
+            max_chunks=args.max_chunks,
+            tts_backend=args.tts,
+            target_minutes=args.target_minutes,
+            research=not args.skip_research,
+        )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

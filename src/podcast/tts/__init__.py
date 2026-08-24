@@ -12,6 +12,10 @@ def get_tts_backend(name: str, *, voice: str | None = None) -> TTSBackend:
         return VibeVoiceTTS(voice=voice or "default")
     if backend_name == "kokoro":
         return KokoroTTS(voice=voice or "af_heart")
+    if backend_name == "dia":
+        from .dia import DiaTTS
+
+        return DiaTTS(voice=voice or "dialogue")
     raise ValueError(f"Unsupported TTS backend: {name}")
 
 
