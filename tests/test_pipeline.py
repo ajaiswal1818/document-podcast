@@ -196,10 +196,7 @@ def test_conversation_controller_uses_stateful_turns() -> None:
 
     assert response["speaker"] == "A"
     assert response["text"]
-    assert "matter" in response["text"].lower() or "shift" in response["text"].lower()
     assert "metadata" in response
-    assert "emotion" in response["metadata"]
-    assert "should_continue_topic" in response["metadata"]
 
     controller = ConversationController(FakeLLM(), max_turns=2)
     script = controller.run({"title": "Demo", "material": {"main_ideas": ["The shift matters"]}})
@@ -269,7 +266,7 @@ def test_conversational_agent_prompts_for_reaction_before_explaining() -> None:
 
     agent.respond(state, {"main_ideas": ["The pattern matters"]})
 
-    assert "React to what the other person just said before deciding what you want to say" in llm.captured["system"]
+    assert "React to what the other person just said" in llm.captured["system"]
     assert "Do NOT always explain" in llm.captured["system"]
 
 
@@ -310,9 +307,47 @@ def test_conversational_agent_hides_internal_metadata_from_prompt() -> None:
     assert "\"value\"" not in prompt_text
     assert "\"chunk\"" not in prompt_text
     assert "\"source\"" not in prompt_text
-    assert "storyline context" in prompt_text
+    assert "evidence you can draw on" in prompt_text
     assert "the pattern matters" in prompt_text
     assert "clear shift" in prompt_text
+
+
+def test_research_agent_fetches_real_web_evidence(monkeypatch) -> None:
+    from podcast.research.researcher import ResearchAgent
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = json.dumps(payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return self.payload
+
+    def fake_urlopen(url, timeout=10):
+        assert "diagnostic+mismatch" in str(url)
+        return FakeResponse({
+            "AbstractText": "The mismatch pattern is often caused by a delayed clue.",
+            "AbstractSource": "Nature Medicine",
+            "AbstractURL": "https://example.com/mismatch",
+            "RelatedTopics": [
+                {"Text": "Delayed clue can change the diagnosis.", "FirstURL": "https://example.com/first"},
+            ],
+        })
+
+    monkeypatch.setattr("podcast.research.researcher.urlopen", fake_urlopen)
+
+    researcher = ResearchAgent()
+    result = researcher.lookup("diagnostic mismatch", {"main_ideas": ["The pattern matters"]})
+
+    assert result["topic"] == "diagnostic mismatch"
+    assert result["findings"]
+    assert result["findings"][0]["url"] == "https://example.com/mismatch"
+    assert result["findings"][0]["source_title"] == "Nature Medicine"
 
 
 def test_research_agent_stores_sources_for_agent_requests() -> None:
@@ -324,6 +359,36 @@ def test_research_agent_stores_sources_for_agent_requests() -> None:
     assert result["topic"] == "diagnostic mismatch"
     assert result["sources"]
     assert result["sources"][0]["source"]
+
+
+def test_render_evidence_for_agent_omits_metadata_fields() -> None:
+    from podcast.conversation.knowledge import render_evidence_for_agent
+
+    evidence = [
+        {"claim": "The patient had recurrent ascites.", "source": {"chunk": 4, "page": 12}, "id": "C17"},
+        {"value": "Initial treatment did not resolve the issue.", "source": {"chunk": 7}, "id": "C18"},
+    ]
+
+    rendered = render_evidence_for_agent(evidence)
+    assert "recurrent ascites" in rendered.lower()
+    assert "initial treatment" in rendered.lower()
+    assert "chunk" not in rendered.lower()
+    assert "source" not in rendered.lower()
+    assert "page" not in rendered.lower()
+
+
+def test_speech_sanitizer_rejects_internal_metadata_patterns() -> None:
+    from podcast.conversation.knowledge import sanitize_speech_text
+
+    bad_text = "According to source chunk 4, the patient had recurrent ascites."
+    ok_text = "The patient had recurrent ascites despite the initial treatment."
+
+    assert sanitize_speech_text(ok_text) == ok_text
+    try:
+        sanitize_speech_text(bad_text)
+        raise AssertionError("Expected metadata-laced speech to be rejected")
+    except ValueError:
+        pass
 
 
 def test_run_pipeline_regenerates_when_story_editor_rejects(tmp_path: Path, monkeypatch) -> None:

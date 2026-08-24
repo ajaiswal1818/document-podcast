@@ -70,12 +70,16 @@ Rules:
 - Identify the key concepts they need to understand before the story makes sense.
 - The teaching items should help a sales or field person understand the science simply.
 """
-    response = llm.generate(
-        "You are a story architect for scientific content.",
-        prompt,
-        max_tokens=10000,
-    )
-    blueprint = json.loads(response)
+    system = "You are a story architect for scientific content."
+    if hasattr(llm, "generate_json"):
+        blueprint = llm.generate_json(system, prompt, max_tokens=10000, retries=2)
+    else:
+        response = llm.generate(system, prompt, max_tokens=10000)
+        start = response.find("{")
+        end = response.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError(f"Story blueprint output contained no JSON object: {response[:200]}")
+        blueprint = json.loads(response[start : end + 1])
     if not isinstance(blueprint, dict):
         raise ValueError("Story blueprint output was not valid JSON.")
     return blueprint

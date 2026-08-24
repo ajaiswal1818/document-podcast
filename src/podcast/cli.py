@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from podcast.conversation.controller import ConversationController
+from podcast.conversation.knowledge import scrub_speech_text
 from podcast.document.parser import DocumentParser, chunk_text
 from podcast.llm.qwen import Qwen
 from podcast.podcast.dialogue import PodcastDialogue
@@ -120,30 +121,36 @@ def run_pipeline(
         script = dialogue_builder.build(plan)
 
     verdict = editor.review(script, story_blueprint)
-    if not verdict["approved"] and len(script.get("dialogue", [])) < 2:
-        for attempt in range(2):
-            regeneration_prompt = editor.build_regeneration_prompt(script, story_blueprint, verdict)
-            script = dialogue_builder.build(plan, regeneration_prompt=regeneration_prompt)
-            verdict = editor.review(script, story_blueprint)
-            if verdict["approved"]:
-                break
+    critical_checks = {"dialogue_is_diverse", "no_metadata_leakage"}
+    for _attempt in range(2):
+        if verdict["approved"]:
+            break
+        regeneration_prompt = editor.build_regeneration_prompt(script, story_blueprint, verdict)
+        candidate = dialogue_builder.build(plan, regeneration_prompt=regeneration_prompt)
+        candidate_verdict = editor.review(candidate, story_blueprint)
+        script_is_degenerate = critical_checks & set(verdict["failed_checks"])
+        candidate_is_degenerate = critical_checks & set(candidate_verdict["failed_checks"])
+        if (script_is_degenerate and not candidate_is_degenerate) or len(
+            candidate_verdict["failed_checks"]
+        ) < len(verdict["failed_checks"]):
+            script, verdict = candidate, candidate_verdict
+    (target_dir / "editor_verdict.json").write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     script_chars = len(json.dumps(script, ensure_ascii=False))
     _record_step(benchmark_steps, "generate_dialogue", start_time=dialogue_started, tokens=max(1, script_chars // 4), chars=script_chars)
     (target_dir / "podcast_script.json").write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
 
     tts = _make_tts_backend(tts_backend)
+    voice_map = {"HOST": "af_heart", "EXPERT": "am_adam"}
     audio_files: list[str] = []
     for turn_index, turn in enumerate(script.get("dialogue", []), start=1):
         speaker = str(turn.get("speaker", "HOST")).strip() or "HOST"
-        text = str(turn.get("text", "")).strip()
+        text = scrub_speech_text(str(turn.get("text", "")).strip())
         if not text:
             continue
         segment_path = target_dir / f"{speaker.lower()}_{turn_index}.wav"
         tts_start = time.perf_counter()
-        if speaker != "HOST":
-            tts.voice = "am_adam"
-        tts.synthesize(text, str(segment_path), voice=tts.voice)
+        tts.synthesize(text, str(segment_path), voice=voice_map.get(speaker, "am_adam"))
         _record_step(benchmark_steps, f"tts_{speaker.lower()}_{turn_index}", start_time=tts_start, chars=len(text))
         audio_files.append(str(segment_path))
 

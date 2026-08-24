@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any
 
+from podcast.conversation.knowledge import render_evidence_for_agent, scrub_speech_text
+
 
 class ConversationalAgent:
     """A conversational participant that responds from prior turns and source material."""
@@ -23,6 +25,8 @@ class ConversationalAgent:
             return ""
 
         cleaned = re.sub(r"(?is)<think>.*?</think>", " ", text)
+        # Truncated generations leave an unclosed <think>; the rest is reasoning, not speech.
+        cleaned = re.sub(r"(?is)<think>.*$", " ", cleaned)
         cleaned = re.sub(r"(?is)```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"(?is)\s*```\s*$", "", cleaned)
         cleaned = cleaned.strip()
@@ -30,10 +34,9 @@ class ConversationalAgent:
         try:
             payload = json.loads(cleaned)
             if isinstance(payload, dict):
-                if isinstance(payload.get("text"), str):
-                    return payload["text"].strip()
-                if isinstance(payload.get("speech"), str):
-                    return payload["speech"].strip()
+                for key in ("text", "speech"):
+                    if isinstance(payload.get(key), str):
+                        return payload[key].strip()
                 if isinstance(payload.get("dialogue"), list):
                     for turn in payload["dialogue"]:
                         if isinstance(turn, dict) and isinstance(turn.get("text"), str):
@@ -54,144 +57,101 @@ class ConversationalAgent:
                     try:
                         payload = json.loads(candidate)
                         if isinstance(payload, dict):
-                            if isinstance(payload.get("text"), str):
-                                return payload["text"].strip()
-                            if isinstance(payload.get("speech"), str):
-                                return payload["speech"].strip()
+                            for key in ("text", "speech"):
+                                if isinstance(payload.get(key), str):
+                                    return payload[key].strip()
                     except json.JSONDecodeError:
                         pass
 
         return cleaned
 
-    def _fallback_text(self, state: Any, material: dict[str, Any] | None = None) -> str:
-        """Create a context-specific fallback when the model is too generic or non-responsive."""
-        topic = getattr(state, "topic", "the topic")
-        history = getattr(state, "turns", []) if hasattr(state, "turns") else []
-        source_summary = material or {}
-        main_ideas = []
-        if isinstance(source_summary, dict):
-            main_ideas = source_summary.get("main_ideas", []) or source_summary.get("facts", []) or []
-        idea = str(main_ideas[0]) if main_ideas else "the underlying pattern"
+    def _strip_speaker_prefix(self, text: str) -> str:
+        """Remove a leading speaker label the model may add despite instructions."""
+        cleaned = text.strip()
+        cleaned = re.sub(rf"^(?:{re.escape(self.name)}|HOST|EXPERT)\s*[:\-]\s*", "", cleaned, flags=re.IGNORECASE)
+        if cleaned.startswith('"') and cleaned.endswith('"') and len(cleaned) > 2:
+            cleaned = cleaned[1:-1].strip()
+        return cleaned
 
-        if not history:
-            if self.name == "A":
-                return f"Let’s start with the problem in {topic}: what is actually changing, and why does it matter?"
-            return f"I’m trying to understand the key issue in {topic} before we get too far into the details."
+    def _idea_texts(self, material: dict[str, Any] | None) -> list[str]:
+        """Collect plain-language idea strings from structured material items."""
+        source = material or {}
+        if isinstance(source, dict):
+            source = source.get("material", source)
+        if not isinstance(source, dict):
+            return []
 
-        if self.name == "A":
-            return f"Why does this matter for {topic}? The key point is that {idea}, and that is what makes the story worth paying attention to."
-        return f"That is interesting, and the real takeaway is that {idea}. It matters because it changes how we understand the pattern in {topic}."
-
-    def _clean_prompt_value(self, value: Any) -> Any:
-        """Recursively remove internal metadata keys and keep only content the agent should act on."""
-        metadata_keys = {"source", "chunk", "value", "metadata", "source_metadata", "source_id"}
-
-        if isinstance(value, list):
-            cleaned: list[Any] = []
-            for item in value:
-                rendered = self._clean_prompt_value(item)
-                if isinstance(rendered, list):
-                    cleaned.extend(rendered)
-                elif rendered is not None:
-                    cleaned.append(rendered)
-            return cleaned
-
-        if isinstance(value, dict):
-            cleaned_dict: dict[str, Any] = {}
-            for key, item in value.items():
-                if key in metadata_keys:
-                    continue
-                cleaned_item = self._clean_prompt_value(item)
-                if cleaned_item not in (None, "", [], {}):
-                    cleaned_dict[key] = cleaned_item
-            if "value" in value and isinstance(value["value"], str):
-                return value["value"]
-            if cleaned_dict:
-                return cleaned_dict
-            return None
-
-        if value is None:
-            return None
-        return str(value)
-
-    def _normalize_material_for_prompt(self, material: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Turn internal structured material into plain-language narrative context for the agent."""
-        source_material = material or {}
-        if isinstance(source_material, dict):
-            source_material = source_material.get("material", source_material)
-
-        normalized: dict[str, Any] = {}
-        if not isinstance(source_material, dict):
-            return {"summary": str(source_material)}
-
-        for key, value in source_material.items():
-            if key in {"source", "chunk", "value", "metadata", "source_metadata"}:
+        ideas: list[str] = []
+        for key in ("translated_main_ideas", "main_ideas", "translated_facts", "facts", "conclusions"):
+            items = source.get(key) or []
+            if not isinstance(items, list):
                 continue
-            cleaned = self._clean_prompt_value(value)
-            if cleaned not in (None, "", [], {}):
-                normalized[key] = cleaned
+            for item in items:
+                if isinstance(item, dict):
+                    value = item.get("value")
+                    if isinstance(value, str) and value.strip():
+                        ideas.append(value.strip())
+                elif isinstance(item, str) and item.strip():
+                    ideas.append(item.strip())
+        return ideas
 
-        if not normalized:
-            return {"summary": "Use the source material to build a clear, audience-friendly explanation."}
-        return normalized
+    def _fallback_text(self, state: Any, material: dict[str, Any] | None = None) -> str:
+        """Create a context-specific fallback when the model output is unusable."""
+        topic = getattr(state, "topic", "the topic")
+        turns = getattr(state, "turns", []) or []
+        ideas = self._idea_texts(material)
+        idea = ideas[len(turns) % len(ideas)] if ideas else f"the central finding behind {topic}"
 
-    def _structured_response(self, state: Any, material: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Return a structured turn payload that separates TTS speech from system metadata."""
-        context = state.render_for_agent(self.name)
-        source_material = material or {}
-        source_summary = self._normalize_material_for_prompt(source_material)
-        system_prompt = (
-            "You are participating in a natural two-person conversation about a technical topic. "
-            "React to what the other person just said before deciding what you want to say. "
-            "Do NOT always explain. Sometimes react, ask a short question, or push on a surprising point. "
-            "Choose a response length naturally: a brief reaction (2-10 words), a short question (5-20 words), a normal response (20-60 words), or a deeper explanation (60-120 words). "
-            "Return valid JSON with keys: speech, intent, topic, new_information, question_for_other_agent, needs_research, confidence, conversation_direction. "
-            f"Your persona: {self.persona}."
-        )
-        user_prompt = (
-            f"Topic: {context['topic']}\n\n"
-            f"Conversation summary: {context['summary']}\n\n"
-            f"Recent turns:\n{json.dumps(context['recent_turns'], ensure_ascii=False, indent=2)}\n\n"
-            f"Relevant storyline context:\n{json.dumps(source_summary, ensure_ascii=False, indent=2)}\n\n"
-            "Generate the next turn as a JSON object with the required keys. The 'speech' field should be the speaking text for audio. "
-            "Keep it conversational, not informational. React first, then decide whether you need to explain, ask, or challenge the idea."
-        )
-        raw = self.llm.generate(system_prompt, user_prompt, max_tokens=600)
-        try:
-            payload = json.loads(self._extract_text(raw))
-        except json.JSONDecodeError:
-            payload = {}
+        if not turns:
+            return f"Let's start with {topic}: what is actually going on here, and why does it matter?"
 
-        if not isinstance(payload, dict):
-            payload = {}
+        templates = [
+            f"Hold on, let's slow down on one point: {idea} What should a listener make of that?",
+            f"The piece I keep coming back to is this: {idea}",
+            f"Here's what stands out to me: {idea} That's the part worth sitting with.",
+        ]
+        return templates[len(turns) % len(templates)]
 
-        speech = str(payload.get("speech") or self._fallback_text(state, source_material))
-        return {
-            "speaker": self.name,
-            "speech": speech,
-            "intent": str(payload.get("intent") or "clarify"),
-            "topic": str(payload.get("topic") or context["topic"]),
-            "new_information": bool(payload.get("new_information", False)),
-            "question_for_other_agent": str(payload.get("question_for_other_agent") or ""),
-            "needs_research": bool(payload.get("needs_research", False)),
-            "confidence": float(payload.get("confidence", 0.8) or 0.8),
-            "conversation_direction": str(payload.get("conversation_direction") or "continue"),
-            "emotion": str(payload.get("emotion") or "curious"),
-            "should_continue_topic": bool(payload.get("should_continue_topic", True)),
-        }
-
-    def respond(self, state: Any, material: dict[str, Any] | None = None) -> dict[str, str]:
-        """Generate the next turn using conversation state and relevant source material."""
+    def respond(self, state: Any, material: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Generate the next spoken turn as plain text from conversation state and source material."""
         if self.llm is None:
             raise RuntimeError("No LLM available for conversational turn generation.")
 
-        response = self._structured_response(state, material)
-        text = str(response.get("speech") or self._fallback_text(state, material)).strip()
-        low_text = text.lower()
-        if not text or text in {"hello", "hi", "world", "test"} or len(text) < 12:
+        context = state.render_for_agent(self.name)
+        evidence = render_evidence_for_agent(material if isinstance(material, dict) else None)
+        recent_turns = context.get("recent_turns", [])
+        transcript = "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in recent_turns)
+        if not transcript:
+            transcript = "(The conversation has not started yet. You speak first.)"
+
+        system_prompt = (
+            f"You are {self.name}, one of two people in a natural spoken conversation about a technical topic. "
+            f"Your persona: {self.persona}. "
+            "React to what the other person just said before deciding what to say. "
+            "Do NOT always explain. Sometimes react briefly, ask a short question, or push on a surprising point. "
+            "Vary your length naturally: a brief reaction, a short question, a normal reply, or occasionally a deeper explanation. "
+            "Ground every factual claim in the evidence provided; never invent data. "
+            "Never mention internal bookkeeping such as sources, chunks, pages, ids, scores, or metadata. "
+            "Do not repeat points that have already been made; move the conversation forward. "
+            f"Reply with ONLY the words {self.name} speaks next - no JSON, no quotes, no speaker label, no stage directions."
+        )
+        user_prompt = (
+            f"Topic: {context['topic']}\n\n"
+            f"Evidence you can draw on:\n{evidence}\n\n"
+            f"Extra facts gathered during the conversation:\n{context.get('safe_fact_context', 'None yet.')}\n\n"
+            f"Conversation so far:\n{transcript}\n\n"
+            f"What does {self.name} say next? Reply with the spoken words only."
+        )
+
+        raw = self.llm.generate(system_prompt, user_prompt, max_tokens=1600)
+        text = self._strip_speaker_prefix(self._extract_text(raw))
+        text = scrub_speech_text(text)
+
+        if not text:
             text = self._fallback_text(state, material)
-        if self.name == "A" and "matter" not in low_text and "shift" not in low_text and "why" not in low_text:
+
+        recent_texts = {str(turn.get("text", "")).strip().lower() for turn in recent_turns}
+        if text.strip().lower() in recent_texts:
             text = self._fallback_text(state, material)
-        if not getattr(state, "turns", None) and "that makes sense" in text.lower():
-            text = self._fallback_text(state, material)
-        return {"speaker": self.name, "text": text, "metadata": response}
+
+        return {"speaker": self.name, "text": text, "metadata": {"persona": self.persona}}

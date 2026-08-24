@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 
 from .story import build_story_blueprint
@@ -176,7 +177,8 @@ def build_episode_plan(analyses: list[dict], title: str = "Local Podcast Episode
     if llm is not None and getattr(llm, "available", False):
         try:
             blueprint = build_story_blueprint(llm, analyses, title=title)
-        except Exception:
+        except Exception as exc:
+            print(f"Warning: story blueprint generation failed, continuing without one: {exc}", file=sys.stderr)
             blueprint = {}
 
     return {

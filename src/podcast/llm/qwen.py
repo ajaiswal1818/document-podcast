@@ -8,9 +8,11 @@ from typing import Any
 
 try:
     from mlx_lm import generate, load
+    from mlx_lm.sample_utils import make_sampler
 except Exception:  # pragma: no cover - optional dependency path
     generate = None
     load = None
+    make_sampler = None
 
 MODEL_VARIANTS = {
     "Qwen3-4B-4bit": "mlx-community/Qwen3-4B-4bit",
@@ -52,6 +54,9 @@ class Qwen:
         text = raw.strip()
 
         text = re.sub(r"(?is)<think>.*?</think>", " ", text)
+        # A generation that ran out of tokens mid-reasoning leaves an unclosed
+        # <think> block; everything after it is internal reasoning, not output.
+        text = re.sub(r"(?is)<think>.*$", " ", text)
         text = re.sub(r"(?is)```(?:json)?\s*", "", text)
         text = re.sub(r"(?is)\s*```\s*$", "", text)
         text = text.strip()
@@ -72,7 +77,7 @@ class Qwen:
 
         return text
 
-    def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+    def generate(self, system: str, user: str, max_tokens: int = 2048, temperature: float = 0.7) -> str:
         """Generate a response using the local Qwen model."""
         if not self.available:
             raise RuntimeError(f"Qwen model is unavailable: {self.load_error}")
@@ -87,12 +92,15 @@ class Qwen:
             add_generation_prompt=True,
         )
 
+        kwargs: dict[str, Any] = {"max_tokens": max_tokens, "verbose": False}
+        if make_sampler is not None and temperature > 0:
+            kwargs["sampler"] = make_sampler(temp=temperature, top_p=0.95)
+
         response = generate(
             self.model,
             self.tokenizer,
             prompt=prompt,
-            max_tokens=max_tokens,
-            verbose=False,
+            **kwargs,
         )
         return self._normalize_json_output(str(response).strip())
 
@@ -102,7 +110,7 @@ class Qwen:
 
         for attempt in range(retries + 1):
             try:
-                raw = self.generate(system, user, max_tokens=max_tokens)
+                raw = self.generate(system, user, max_tokens=max_tokens, temperature=0.3)
                 payload = json.loads(raw)
                 if isinstance(payload, dict):
                     return payload

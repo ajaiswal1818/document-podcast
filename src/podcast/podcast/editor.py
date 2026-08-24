@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+_LEAK_PATTERNS = (
+    r"\{['\"]?value['\"]?\s*:",
+    r"['\"]?source['\"]?\s*:\s*\{",
+    r"\bchunk\s*\d+",
+    r"\bclaim[_ -]?id\b",
+    r"\bretrieval[_ -]?score\b",
+)
 
 
 class StoryEditor:
@@ -55,6 +64,19 @@ class StoryEditor:
             or any(marker in final_expert_text for marker in explicit_takeaway_markers)
         )
 
+        turn_texts = [
+            str(turn.get("text", "")).strip()
+            for turn in dialogue
+            if isinstance(turn, dict) and str(turn.get("text", "")).strip()
+        ]
+        unique_texts = {text.lower() for text in turn_texts}
+        dialogue_is_diverse = (
+            len(unique_texts) / len(turn_texts) >= 0.6 if len(turn_texts) > 3 else bool(turn_texts)
+        )
+        no_metadata_leakage = not any(
+            re.search(pattern, text, flags=re.IGNORECASE) for text in turn_texts for pattern in _LEAK_PATTERNS
+        )
+
         checks = {
             "has_two_humans": bool(script.get("speakers")),
             "host_asks_questions": host_questions >= 1,
@@ -63,6 +85,8 @@ class StoryEditor:
             "technical_terms_are_explained": bool(blueprint.get("teaching") or blueprint.get("audience")),
             "takeaway_is_clear": takeaway_is_clear,
             "facts_are_present": bool(dialogue),
+            "dialogue_is_diverse": dialogue_is_diverse,
+            "no_metadata_leakage": no_metadata_leakage,
         }
 
         failed_checks = [name for name, passed in checks.items() if not passed]
@@ -96,6 +120,10 @@ class StoryEditor:
             questions.append("End with a clear takeaway that tells the audience why this matters and what they should remember.")
         if "facts_are_present" in failed:
             questions.append("Ensure the dialogue includes concrete source-backed facts and not just generic discussion.")
+        if "dialogue_is_diverse" in failed:
+            questions.append("Every turn must say something new; do not repeat the same sentence or restate the same point across turns.")
+        if "no_metadata_leakage" in failed:
+            questions.append("Remove all internal bookkeeping from the spoken text: no source references, chunk numbers, ids, scores, or dict/JSON fragments.")
 
         if not questions:
             return "Keep the current story and tighten the wording, but do not change the core structure."

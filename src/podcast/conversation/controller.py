@@ -2,43 +2,48 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from podcast.agents.conversational_agent import ConversationalAgent
+from podcast.conversation.knowledge import render_evidence_for_agent
 from podcast.research.researcher import ResearchAgent
 
 
 class ConversationState:
-    """Tracks the current conversational history and relevant knowledge."""
+    """Tracks the conversational thread and the knowledge it has generated."""
 
     def __init__(self, topic: str) -> None:
         self.topic = topic
         self.turns: list[dict[str, str]] = []
         self.facts: list[str] = []
         self.open_questions: list[str] = []
-        self.summary = "The conversation is beginning."
+
+    @property
+    def summary(self) -> str:
+        if not self.turns:
+            return "The conversation is beginning."
+        return f"Discussion of {self.topic}, {len(self.turns)} turns so far."
 
     def add_turn(self, speaker: str, text: str) -> None:
         if not text:
             return
         self.turns.append({"speaker": speaker, "text": text})
-        if len(self.turns) > 32:
-            self.turns = self.turns[-32:]
-        self.summary = self._build_summary()
 
-    def _build_summary(self) -> str:
-        if not self.turns:
-            return "The conversation is beginning."
-        recent = " | ".join(f"{turn['speaker']}: {turn['text']}" for turn in self.turns[-4:])
-        return f"Current thread: {self.topic}. Recent turns: {recent}"
+    def add_facts(self, facts: list[str]) -> None:
+        for fact in facts:
+            cleaned = str(fact).strip()
+            if cleaned and cleaned not in self.facts:
+                self.facts.append(cleaned)
 
     def render_for_agent(self, speaker: str) -> dict[str, Any]:
         return {
             "topic": self.topic,
             "summary": self.summary,
-            "recent_turns": self.turns[-6:],
+            "recent_turns": self.turns[-8:],
             "speaker": speaker,
+            "safe_fact_context": render_evidence_for_agent(
+                [{"claim": fact} for fact in self.facts]
+            ),
         }
 
 
@@ -65,23 +70,24 @@ class ConversationController:
             base_material = {}
 
         state = ConversationState(title)
-        current_index = 0
+        try:
+            research = self.research_agent.lookup(title, base_material)
+            state.add_facts(
+                [str(finding.get("claim", "")) for finding in research.get("findings", []) if isinstance(finding, dict)]
+            )
+        except Exception:
+            pass
 
+        current_index = 0
         for _ in range(self.max_turns):
             agent = self.agents[current_index]
-            response = agent.respond(state, base_material)
-            metadata = response.get("metadata", {})
-            if metadata.get("needs_research"):
-                topic = metadata.get("topic") or title
-                research = self.research_agent.lookup(str(topic), base_material)
-                state.summary = f"Research retrieved for {topic}: {research['summary']}"
+            response = agent.respond(state, source_material if isinstance(source_material, dict) else base_material)
             speech = response.get("text") or response.get("speech") or ""
             state.add_turn(agent.name, speech)
             current_index = 1 - current_index
 
-        script = {
+        return {
             "title": title,
             "speakers": list(self.agent_names),
             "dialogue": [{"speaker": turn["speaker"], "text": turn["text"]} for turn in state.turns],
         }
-        return script
