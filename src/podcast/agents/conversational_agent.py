@@ -66,14 +66,21 @@ class ConversationalAgent:
     def _fallback_text(self, state: Any, material: dict[str, Any] | None = None) -> str:
         """Create a context-specific fallback when the model is too generic or non-responsive."""
         topic = getattr(state, "topic", "the topic")
+        history = getattr(state, "turns", []) if hasattr(state, "turns") else []
         source_summary = material or {}
         main_ideas = []
         if isinstance(source_summary, dict):
             main_ideas = source_summary.get("main_ideas", []) or source_summary.get("facts", []) or []
         idea = str(main_ideas[0]) if main_ideas else "the underlying pattern"
+
+        if not history:
+            if self.name == "A":
+                return f"Let’s start with the problem in {topic}: what is actually changing, and why does it matter?"
+            return f"I’m trying to understand the key issue in {topic} before we get too far into the details."
+
         if self.name == "A":
             return f"Why does this matter for {topic}? The key point is that {idea}, and that is what makes the story worth paying attention to."
-        return f"That makes sense, and the real takeaway is that {idea}. It matters because it changes how we understand the pattern in {topic}."
+        return f"That is interesting, and the real takeaway is that {idea}. It matters because it changes how we understand the pattern in {topic}."
 
     def _normalize_material_for_prompt(self, material: dict[str, Any] | None = None) -> dict[str, Any]:
         """Turn internal structured material into plain-language narrative context for the agent."""
@@ -169,5 +176,7 @@ class ConversationalAgent:
         if not text or text in {"hello", "hi", "world", "test"} or len(text) < 12:
             text = self._fallback_text(state, material)
         if self.name == "A" and "matter" not in low_text and "shift" not in low_text and "why" not in low_text:
+            text = self._fallback_text(state, material)
+        if not getattr(state, "turns", None) and "that makes sense" in text.lower():
             text = self._fallback_text(state, material)
         return {"speaker": self.name, "text": text, "metadata": response}
