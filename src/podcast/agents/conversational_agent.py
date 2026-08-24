@@ -82,6 +82,38 @@ class ConversationalAgent:
             return f"Why does this matter for {topic}? The key point is that {idea}, and that is what makes the story worth paying attention to."
         return f"That is interesting, and the real takeaway is that {idea}. It matters because it changes how we understand the pattern in {topic}."
 
+    def _clean_prompt_value(self, value: Any) -> Any:
+        """Recursively remove internal metadata keys and keep only content the agent should act on."""
+        metadata_keys = {"source", "chunk", "value", "metadata", "source_metadata", "source_id"}
+
+        if isinstance(value, list):
+            cleaned: list[Any] = []
+            for item in value:
+                rendered = self._clean_prompt_value(item)
+                if isinstance(rendered, list):
+                    cleaned.extend(rendered)
+                elif rendered is not None:
+                    cleaned.append(rendered)
+            return cleaned
+
+        if isinstance(value, dict):
+            cleaned_dict: dict[str, Any] = {}
+            for key, item in value.items():
+                if key in metadata_keys:
+                    continue
+                cleaned_item = self._clean_prompt_value(item)
+                if cleaned_item not in (None, "", [], {}):
+                    cleaned_dict[key] = cleaned_item
+            if "value" in value and isinstance(value["value"], str):
+                return value["value"]
+            if cleaned_dict:
+                return cleaned_dict
+            return None
+
+        if value is None:
+            return None
+        return str(value)
+
     def _normalize_material_for_prompt(self, material: dict[str, Any] | None = None) -> dict[str, Any]:
         """Turn internal structured material into plain-language narrative context for the agent."""
         source_material = material or {}
@@ -95,26 +127,9 @@ class ConversationalAgent:
         for key, value in source_material.items():
             if key in {"source", "chunk", "value", "metadata", "source_metadata"}:
                 continue
-            if isinstance(value, list):
-                cleaned = []
-                for item in value:
-                    if isinstance(item, dict):
-                        if "value" in item and isinstance(item["value"], str):
-                            cleaned.append(item["value"])
-                        elif "text" in item and isinstance(item["text"], str):
-                            cleaned.append(item["text"])
-                        else:
-                            cleaned.append(str(item))
-                    else:
-                        cleaned.append(str(item))
+            cleaned = self._clean_prompt_value(value)
+            if cleaned not in (None, "", [], {}):
                 normalized[key] = cleaned
-            elif isinstance(value, dict):
-                if "value" in value and isinstance(value["value"], str):
-                    normalized[key] = value["value"]
-                else:
-                    normalized[key] = str(value)
-            else:
-                normalized[key] = value
 
         if not normalized:
             return {"summary": "Use the source material to build a clear, audience-friendly explanation."}
@@ -137,7 +152,7 @@ class ConversationalAgent:
             f"Topic: {context['topic']}\n\n"
             f"Conversation summary: {context['summary']}\n\n"
             f"Recent turns:\n{json.dumps(context['recent_turns'], ensure_ascii=False, indent=2)}\n\n"
-            f"Relevant source material:\n{json.dumps(source_summary, ensure_ascii=False, indent=2)}\n\n"
+            f"Relevant storyline context:\n{json.dumps(source_summary, ensure_ascii=False, indent=2)}\n\n"
             "Generate the next turn as a JSON object with the required keys. The 'speech' field should be the speaking text for audio. "
             "Keep it conversational, not informational. React first, then decide whether you need to explain, ask, or challenge the idea."
         )

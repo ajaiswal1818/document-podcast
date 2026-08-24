@@ -306,9 +306,13 @@ def test_conversational_agent_hides_internal_metadata_from_prompt() -> None:
         "facts": [{"value": "The trial showed a clear shift.", "source": {"chunk": 2}}],
     })
 
-    assert "\"value\"" not in llm.captured["user"]
-    assert "chunk" not in llm.captured["user"]
-    assert "The pattern matters" in llm.captured["user"]
+    prompt_text = llm.captured["user"].lower()
+    assert "\"value\"" not in prompt_text
+    assert "\"chunk\"" not in prompt_text
+    assert "\"source\"" not in prompt_text
+    assert "storyline context" in prompt_text
+    assert "the pattern matters" in prompt_text
+    assert "clear shift" in prompt_text
 
 
 def test_research_agent_stores_sources_for_agent_requests() -> None:
