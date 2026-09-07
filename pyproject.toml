@@ -17,6 +17,7 @@ dependencies = [
     "numpy",
     "soundfile",
     "kokoro-mlx",
+    "cartesia[websockets]>=4.0.1",
     "pytest>=8.0",
 ]
 

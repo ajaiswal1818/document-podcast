@@ -8,7 +8,7 @@ A local-first podcast generation pipeline for Apple Silicon. This v0.1 targets a
 - document chunking for context-limited local LLMs
 - Qwen3 4B 4-bit via MLX as the default local reasoning model
 - structured episode planning and dialogue generation
-- Kokoro MLX TTS for local voice synthesis
+- Cartesia Sonic TTS for CLI runs with exactly two consistent voices: Skylar (HOST) and Daniel (EXPERT)
 
 ## Project layout
 
@@ -22,7 +22,7 @@ A local-first podcast generation pipeline for Apple Silicon. This v0.1 targets a
   - `scripting/` — script generation: `episode_planner.py`, `story_blueprint.py`, `scene_writer.py` (primary), `script_builder.py` (single-shot fallback), `script_editor.py` (quality gate)
   - `conversation/` — turn-loop fallback: `turn_loop.py`, `agent.py`, `evidence.py` (metadata/speech hygiene)
   - `llm/qwen.py` — MLX Qwen wrapper
-  - `tts/` — speech: `kokoro.py` (default), `dia.py` (whole-conversation prosody, optional), `assembly.py` (pauses, loudness, final join)
+  - `tts/` — speech: `cartesia.py` (CLI default, two fixed voices), `kokoro.py` (local default for programmatic use and tests), `dia.py` (whole-conversation prosody, optional), `assembly.py` (pauses, loudness, final join)
 
 ## Quick start
 

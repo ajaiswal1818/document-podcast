@@ -634,8 +634,75 @@ def test_run_pipeline_regenerates_when_story_editor_rejects(tmp_path: Path, monk
 def test_tts_backend_factory_uses_selected_backend() -> None:
     from podcast.tts import get_tts_backend
 
+    assert get_tts_backend("cartesia").__class__.__name__ == "CartesiaTTS"
     assert get_tts_backend("kokoro").__class__.__name__ == "KokoroTTS"
     assert get_tts_backend("vibevoice").__class__.__name__ == "VibeVoiceTTS"
+
+
+def test_cartesia_uses_one_fixed_voice_per_podcast_role(tmp_path: Path, monkeypatch) -> None:
+    from podcast.tts.cartesia import EXPERT_VOICE, HOST_VOICE, CartesiaTTS
+
+    captured: dict[str, object] = {"chunks": []}
+
+    class Response:
+        type = "chunk"
+        audio = b"\x00\x00\x01\x00"
+
+    class FakeContext:
+        def push(self, chunk: str) -> None:
+            captured["chunks"].append(chunk)
+
+        def no_more_inputs(self) -> None:
+            captured["finalized"] = True
+
+        def receive(self):
+            return [Response()]
+
+    class FakeWebsocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def context(self, **kwargs):
+            captured["context"] = kwargs
+            return FakeContext()
+
+    class FakeClient:
+        def __init__(self, *, api_key: str) -> None:
+            captured["api_key"] = api_key
+            self.tts = self
+
+        def websocket_connect(self):
+            return FakeWebsocket()
+
+    monkeypatch.setattr("podcast.tts.cartesia.Cartesia", FakeClient)
+    tts = CartesiaTTS(api_key="test-key")
+
+    output = tmp_path / "host.wav"
+    assert tts.synthesize("Welcome to the show.", str(output), voice=HOST_VOICE) == str(output)
+    assert output.read_bytes().startswith(b"RIFF")
+    assert captured["context"] == {
+        "model_id": "sonic-3.6",
+        "voice": HOST_VOICE,
+        "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 44100},
+        "language": "en",
+    }
+    assert captured["chunks"] == ["Welcome to the show."]
+    assert captured["finalized"] is True
+    assert tts.voice == HOST_VOICE
+    assert EXPERT_VOICE != HOST_VOICE
+
+
+def test_cartesia_continuations_preserve_exact_text() -> None:
+    from podcast.tts.cartesia import CartesiaTTS, MAX_CONTINUATION_CHARS
+
+    transcript = "word " * (MAX_CONTINUATION_CHARS // 5 + 20)
+    chunks = CartesiaTTS._continuation_chunks(transcript)
+
+    assert len(chunks) > 1
+    assert "".join(chunks) == transcript
 
 
 def test_run_pipeline_generates_audio_file(tmp_path: Path, monkeypatch) -> None:

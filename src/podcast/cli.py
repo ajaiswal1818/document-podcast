@@ -23,14 +23,19 @@ from podcast.scripting.episode_planner import analyse_chunk, build_episode_plan,
 from podcast.scripting.scene_writer import SceneScriptWriter
 from podcast.scripting.story_blueprint import build_story_blueprint
 from podcast.research.researcher import ResearchAgent
-from podcast.tts import VibeVoiceTTS, get_tts_backend
+from podcast.tts import CartesiaTTS, VibeVoiceTTS, get_tts_backend
 from podcast.tts.assembly import assemble_audio_files
+from podcast.tts.cartesia import EXPERT_VOICE as CARTESIA_EXPERT_VOICE
+from podcast.tts.cartesia import HOST_VOICE as CARTESIA_HOST_VOICE
 from podcast.tts.kokoro import KokoroTTS
 
 
 def _make_tts_backend(name: str) -> Any:
     """Create a TTS backend while preserving compatibility with existing test monkeypatches."""
-    backend_name = (name or "kokoro").lower()
+    backend_name = (name or "cartesia").lower()
+    if backend_name == "cartesia":
+        ctor = globals().get("CartesiaTTS") or get_tts_backend("cartesia").__class__
+        return ctor()
     if backend_name == "kokoro":
         ctor = globals().get("KokoroTTS") or get_tts_backend("kokoro").__class__
         return ctor()
@@ -93,6 +98,7 @@ def run_pipeline(
     *,
     llm: Qwen | None = None,
     max_chunks: int = 5,
+    # Keep programmatic runs and tests local unless a backend is explicitly chosen.
     tts_backend: str = "kokoro",
     target_minutes: float = 15.0,
     research: bool = True,
@@ -225,7 +231,11 @@ def run_pipeline(
         llm.release()
 
     tts = _make_tts_backend(tts_backend)
-    voice_map = {"HOST": "af_heart", "EXPERT": "am_adam"}
+    voice_map = (
+        {"HOST": CARTESIA_HOST_VOICE, "EXPERT": CARTESIA_EXPERT_VOICE}
+        if tts_backend.lower() == "cartesia"
+        else {"HOST": "af_heart", "EXPERT": "am_adam"}
+    )
     audio_files: list[str] = []
     dialogue_turns = script.get("dialogue", [])
     if hasattr(tts, "synthesize_dialogue"):
@@ -302,9 +312,9 @@ def main() -> None:
     parser.add_argument("--max-chunks", type=int, default=5, help="Maximum number of chunks to process in v0.1.")
     parser.add_argument(
         "--tts",
-        choices=["kokoro", "vibevoice", "dia"],
-        default="kokoro",
-        help="TTS backend. 'dia' synthesizes whole conversations with cross-turn prosody (requires mlx-audio).",
+        choices=["cartesia", "kokoro", "vibevoice", "dia"],
+        default="cartesia",
+        help="TTS backend. Cartesia uses stable Skylar (HOST) and Daniel (EXPERT) voices from CARTESIA_API_KEY.",
     )
     parser.add_argument("--skip-research", action="store_true", help="Skip scholarly research retrieval.")
     parser.add_argument(
