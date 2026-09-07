@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import wave
 from pathlib import Path
 
@@ -34,6 +35,12 @@ def _load_project_env() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
+def has_cartesia_api_key() -> bool:
+    """Return whether a Cartesia API key is available from the environment or .env."""
+    _load_project_env()
+    return bool(os.getenv("CARTESIA_API_KEY"))
+
+
 class CartesiaTTS(TTSBackend):
     """Synthesize podcast turns with Cartesia contexts and continuations."""
 
@@ -62,6 +69,7 @@ class CartesiaTTS(TTSBackend):
         destination.parent.mkdir(parents=True, exist_ok=True)
         chunks = self._continuation_chunks(transcript)
         client = Cartesia(api_key=self.api_key)
+        audio_bytes = 0
         try:
             with client.tts.websocket_connect() as websocket:
                 context = websocket.context(
@@ -81,6 +89,7 @@ class CartesiaTTS(TTSBackend):
                     for response in context.receive():
                         if response.type == "chunk" and response.audio:
                             wav_file.writeframes(response.audio)
+                            audio_bytes += len(response.audio)
                         elif response.type == "error":
                             detail = getattr(response, "message", None) or getattr(response, "title", "Unknown error")
                             raise RuntimeError(f"Cartesia synthesis failed: {detail}")
@@ -88,6 +97,13 @@ class CartesiaTTS(TTSBackend):
             raise
         except Exception as exc:
             raise RuntimeError(f"Cartesia synthesis request failed: {exc}") from exc
+        if not audio_bytes:
+            raise RuntimeError("Cartesia synthesis returned no audio.")
+        print(
+            f"TTS: Cartesia completed model={self.model_id} voice_id={voice or self.voice} "
+            f"context_chunks={len(chunks)} pcm_bytes={audio_bytes}",
+            file=sys.stderr,
+        )
         return str(destination)
 
     @staticmethod

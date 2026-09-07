@@ -16,6 +16,9 @@ from typing import Any
 from podcast.conversation.turn_loop import ConversationController
 from podcast.conversation.evidence import dedupe_repeated_sentences, scrub_speech_text
 from podcast.document.parser import DocumentParser, chunk_text
+from podcast.llm.openai import DEFAULT_MODEL as DEFAULT_OPENAI_MODEL
+from podcast.llm.openai import OpenAIChatGPT
+from podcast.llm.openai import has_openai_api_key
 from podcast.llm.qwen import Qwen
 from podcast.scripting.script_builder import PodcastDialogue
 from podcast.scripting.script_editor import StoryEditor
@@ -27,6 +30,7 @@ from podcast.tts import CartesiaTTS, VibeVoiceTTS, get_tts_backend
 from podcast.tts.assembly import assemble_audio_files
 from podcast.tts.cartesia import EXPERT_VOICE as CARTESIA_EXPERT_VOICE
 from podcast.tts.cartesia import HOST_VOICE as CARTESIA_HOST_VOICE
+from podcast.tts.cartesia import has_cartesia_api_key
 from podcast.tts.kokoro import KokoroTTS
 
 
@@ -45,6 +49,22 @@ def _make_tts_backend(name: str) -> Any:
     if backend_name == "dia":
         return get_tts_backend("dia")
     raise ValueError(f"Unsupported TTS backend: {name}")
+
+
+def _resolve_llm_backend(requested: str) -> str:
+    """Prefer OpenAI when configured, otherwise retain an offline-capable CLI."""
+    if requested in {"auto", "openai"} and has_openai_api_key():
+        return "openai"
+    return "qwen"
+
+
+def _resolve_tts_backend(requested: str) -> str:
+    """Prefer Cartesia when configured, otherwise retain an offline-capable CLI."""
+    if requested not in {"auto", "cartesia"}:
+        return requested
+    if requested in {"auto", "cartesia"} and has_cartesia_api_key():
+        return "cartesia"
+    return "kokoro"
 
 
 def _record_step(metrics: list[dict[str, Any]], name: str, *, start_time: float | None = None, tokens: int | None = None, chars: int | None = None) -> float:
@@ -96,7 +116,7 @@ def run_pipeline(
     input_path: str,
     output_dir: str | Path = "data/output",
     *,
-    llm: Qwen | None = None,
+    llm: Any | None = None,
     max_chunks: int = 5,
     # Keep programmatic runs and tests local unless a backend is explicitly chosen.
     tts_backend: str = "kokoro",
@@ -122,7 +142,7 @@ def run_pipeline(
 
     llm = llm or Qwen()
     if not llm.available:
-        raise RuntimeError("Qwen model unavailable.")
+        raise RuntimeError("Selected LLM is unavailable.")
 
     research_report: dict[str, Any] = {}
     if research:
@@ -213,6 +233,7 @@ def run_pipeline(
             break
         regeneration_prompt = editor.build_regeneration_prompt(script, story_blueprint, verdict)
         candidate = dialogue_builder.build(plan, regeneration_prompt=regeneration_prompt)
+        candidate["dialogue"] = dedupe_repeated_sentences(candidate.get("dialogue", []))
         candidate_verdict = editor.review(candidate, story_blueprint, target_words=target_words)
         script_is_degenerate = critical_checks & set(verdict["failed_checks"])
         candidate_is_degenerate = critical_checks & set(candidate_verdict["failed_checks"])
@@ -220,6 +241,7 @@ def run_pipeline(
             candidate_verdict["failed_checks"]
         ) < len(verdict["failed_checks"]):
             script, verdict = candidate, candidate_verdict
+    script["dialogue"] = dedupe_repeated_sentences(script.get("dialogue", []))
     (target_dir / "editor_verdict.json").write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     script_chars = len(json.dumps(script, ensure_ascii=False))
@@ -230,12 +252,36 @@ def run_pipeline(
     if hasattr(llm, "release"):
         llm.release()
 
-    tts = _make_tts_backend(tts_backend)
+    backend_name = (tts_backend or "kokoro").lower()
+    tts = _make_tts_backend(backend_name)
     voice_map = (
         {"HOST": CARTESIA_HOST_VOICE, "EXPERT": CARTESIA_EXPERT_VOICE}
-        if tts_backend.lower() == "cartesia"
+        if backend_name == "cartesia"
         else {"HOST": "af_heart", "EXPERT": "am_adam"}
     )
+    tts_manifest: dict[str, Any] = {
+        "backend": backend_name,
+        "segments": 0,
+    }
+    if backend_name == "cartesia":
+        tts_manifest.update(
+            {
+                "provider": "Cartesia",
+                "model": getattr(tts, "model_id", "sonic-3.6"),
+                "voice_roles": {
+                    "HOST": {"name": "Skylar", "id": CARTESIA_HOST_VOICE},
+                    "EXPERT": {"name": "Daniel", "id": CARTESIA_EXPERT_VOICE},
+                },
+                "contexts": {"enabled": True, "scope": "one context per spoken turn"},
+            }
+        )
+        print(
+            "TTS: using Cartesia Sonic with Skylar (HOST) and Daniel (EXPERT); "
+            "WebSocket contexts enabled.",
+            file=sys.stderr,
+        )
+    else:
+        print(f"TTS: using local backend={backend_name}.", file=sys.stderr)
     audio_files: list[str] = []
     dialogue_turns = script.get("dialogue", [])
     if hasattr(tts, "synthesize_dialogue"):
@@ -285,6 +331,10 @@ def run_pipeline(
             json.dumps({"audio_files": audio_files, "output": str(final_audio_path)}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+    tts_manifest["segments"] = len(audio_files)
+    (target_dir / "tts_manifest.json").write_text(
+        json.dumps(tts_manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     total_time = time.perf_counter() - benchmark_started
     benchmark_payload = {
@@ -304,6 +354,17 @@ def main() -> None:
     parser.add_argument("input", help="Path to the input PDF or text document")
     parser.add_argument("--output-dir", default="data/output", help="Directory for generated output artifacts")
     parser.add_argument(
+        "--llm",
+        choices=["auto", "openai", "qwen"],
+        default="auto",
+        help="LLM provider. Auto uses OpenAI when OPENAI_API_KEY is set, otherwise local Qwen.",
+    )
+    parser.add_argument(
+        "--openai-model",
+        default=DEFAULT_OPENAI_MODEL,
+        help=f"OpenAI model for --llm openai (default: {DEFAULT_OPENAI_MODEL}).",
+    )
+    parser.add_argument(
         "--model-version",
         choices=["Qwen3-4B-4bit", "Qwen3-4B-6bit", "Qwen3-4B-8bit", "Qwen3-8B-4bit"],
         default="Qwen3-4B-4bit",
@@ -312,9 +373,9 @@ def main() -> None:
     parser.add_argument("--max-chunks", type=int, default=5, help="Maximum number of chunks to process in v0.1.")
     parser.add_argument(
         "--tts",
-        choices=["cartesia", "kokoro", "vibevoice", "dia"],
-        default="cartesia",
-        help="TTS backend. Cartesia uses stable Skylar (HOST) and Daniel (EXPERT) voices from CARTESIA_API_KEY.",
+        choices=["auto", "cartesia", "kokoro", "vibevoice", "dia"],
+        default="auto",
+        help="TTS backend. Auto uses Cartesia when CARTESIA_API_KEY is set, otherwise local Kokoro.",
     )
     parser.add_argument("--skip-research", action="store_true", help="Skip scholarly research retrieval.")
     parser.add_argument(
@@ -326,16 +387,26 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        llm = Qwen(model_version=args.model_version)
+        llm_backend = _resolve_llm_backend(args.llm)
+        tts_backend = _resolve_tts_backend(args.tts)
+        llm = OpenAIChatGPT(model=args.openai_model) if llm_backend == "openai" else Qwen(model_version=args.model_version)
         if not llm.available:
-            raise RuntimeError("Qwen model unavailable.")
+            raise RuntimeError(f"Selected LLM is unavailable: {getattr(llm, 'load_error', None)}")
+        if llm_backend == "openai":
+            print(f"LLM: using OpenAI model={args.openai_model}.", file=sys.stderr)
+        else:
+            print(f"LLM: using local Qwen model={args.model_version}.", file=sys.stderr)
+        if args.llm != llm_backend:
+            print("LLM: OpenAI key not found; fell back to local Qwen.", file=sys.stderr)
+        if args.tts != tts_backend:
+            print("TTS: Cartesia key not found; fell back to local Kokoro.", file=sys.stderr)
 
         result = run_pipeline(
             args.input,
             args.output_dir,
             llm=llm,
             max_chunks=args.max_chunks,
-            tts_backend=args.tts,
+            tts_backend=tts_backend,
             target_minutes=args.target_minutes,
             research=not args.skip_research,
         )

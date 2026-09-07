@@ -6,7 +6,7 @@ A local-first podcast generation pipeline for Apple Silicon. This v0.1 targets a
 
 - PDF extraction with PyMuPDF
 - document chunking for context-limited local LLMs
-- Qwen3 4B 4-bit via MLX as the default local reasoning model
+- OpenAI ChatGPT via the Responses API as the CLI reasoning model; Qwen remains available for local/offline runs
 - structured episode planning and dialogue generation
 - Cartesia Sonic TTS for CLI runs with exactly two consistent voices: Skylar (HOST) and Daniel (EXPERT)
 
@@ -21,7 +21,8 @@ A local-first podcast generation pipeline for Apple Silicon. This v0.1 targets a
   - `research/researcher.py` — scholarly retrieval (Europe PMC / Crossref, open-access full text)
   - `scripting/` — script generation: `episode_planner.py`, `story_blueprint.py`, `scene_writer.py` (primary), `script_builder.py` (single-shot fallback), `script_editor.py` (quality gate)
   - `conversation/` — turn-loop fallback: `turn_loop.py`, `agent.py`, `evidence.py` (metadata/speech hygiene)
-  - `llm/qwen.py` — MLX Qwen wrapper
+  - `llm/openai.py` — OpenAI Responses API wrapper (CLI default)
+  - `llm/qwen.py` — MLX Qwen wrapper for local/offline runs
   - `tts/` — speech: `cartesia.py` (CLI default, two fixed voices), `kokoro.py` (local default for programmatic use and tests), `dia.py` (whole-conversation prosody, optional), `assembly.py` (pauses, loudness, final join)
 
 ## Quick start
@@ -33,12 +34,12 @@ uv pip install -e .
 python -m podcast.cli ./data/input/document.pdf
 ```
 
-## Local model target
+## LLM configuration
 
-The default Qwen model is:
+The CLI auto-selects OpenAI and Cartesia when their keys are in the ignored `.env`; with no `.env` or missing keys, it uses local Qwen and Kokoro instead. To run:
 
-```python
-mlx-community/Qwen3-4B-4bit
+```bash
+uv run document-podcast ./data/input/document.pdf
 ```
 
-This is a comfortable first target for a 16 GB M4 Mac and remains a strong v0.1 baseline before benchmarking 6-bit and 8-bit variants.
+Use `--llm qwen --tts kokoro` to force local providers. Programmatic `run_pipeline()` also remains local by default for tests.

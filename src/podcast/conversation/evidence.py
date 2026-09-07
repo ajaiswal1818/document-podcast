@@ -103,7 +103,10 @@ def dedupe_repeated_sentences(turns: list[dict[str, Any]]) -> list[dict[str, Any
             if len(normalized.split()) >= 6:
                 is_duplicate = normalized in seen or any(
                     abs(len(prior) - len(normalized)) < 30
-                    and difflib.SequenceMatcher(None, normalized, prior).ratio() > 0.92
+                    # LLM loops commonly make tiny word-order or filler changes
+                    # to a sentence they have already used. Treat those as repeats
+                    # before they reach the TTS stage.
+                    and difflib.SequenceMatcher(None, normalized, prior).ratio() > 0.80
                     for prior in seen
                 )
                 if is_duplicate:

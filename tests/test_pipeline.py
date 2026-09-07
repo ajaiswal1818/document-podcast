@@ -98,6 +98,55 @@ def test_dialogue_extracts_valid_json_from_raw_think_output() -> None:
     assert len(script["dialogue"]) == 2
 
 
+def test_openai_llm_uses_responses_api_without_storing_state() -> None:
+    from podcast.llm.openai import OpenAIChatGPT
+
+    captured: dict[str, object] = {}
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return type("Response", (), {"output_text": '{"answer": "ready"}'})()
+
+    class FakeClient:
+        responses = FakeResponses()
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    llm = OpenAIChatGPT(api_key="test-key", model="gpt-test", client=FakeClient())
+
+    assert llm.available
+    assert llm.generate_json("System prompt", "User prompt") == {"answer": "ready"}
+    assert captured["model"] == "gpt-test"
+    assert captured["instructions"] == "System prompt"
+    assert captured["store"] is False
+    llm.release()
+    assert captured["closed"] is True
+
+
+def test_cli_auto_selection_falls_back_to_local_without_api_keys(monkeypatch) -> None:
+    from podcast.cli import _resolve_llm_backend, _resolve_tts_backend
+
+    monkeypatch.setattr("podcast.cli.has_openai_api_key", lambda: False)
+    monkeypatch.setattr("podcast.cli.has_cartesia_api_key", lambda: False)
+
+    assert _resolve_llm_backend("auto") == "qwen"
+    assert _resolve_llm_backend("openai") == "qwen"
+    assert _resolve_tts_backend("auto") == "kokoro"
+    assert _resolve_tts_backend("cartesia") == "kokoro"
+
+
+def test_cli_auto_selection_uses_configured_api_keys(monkeypatch) -> None:
+    from podcast.cli import _resolve_llm_backend, _resolve_tts_backend
+
+    monkeypatch.setattr("podcast.cli.has_openai_api_key", lambda: True)
+    monkeypatch.setattr("podcast.cli.has_cartesia_api_key", lambda: True)
+
+    assert _resolve_llm_backend("auto") == "openai"
+    assert _resolve_tts_backend("auto") == "cartesia"
+
+
 def test_episode_plan_tracks_source_chunks() -> None:
     plan = build_episode_plan([
         {"facts": ["A fact"], "numbers": ["42"], "main_ideas": ["Idea 1"]},
@@ -420,6 +469,17 @@ def test_dedupe_removes_repeated_sentences_across_turns() -> None:
     assert len(result) == 4  # turn 5 was entirely a repeat and got dropped
 
 
+def test_dedupe_removes_small_rewordings_of_the_same_sentence() -> None:
+    from podcast.conversation.evidence import dedupe_repeated_sentences
+
+    turns = [
+        {"speaker": "EXPERT", "text": "The antibody result changed the diagnosis because it revealed lupus behind the unexplained fluid."},
+        {"speaker": "EXPERT", "text": "The antibody result changed the diagnosis because it revealed lupus behind unexplained fluid."},
+    ]
+
+    assert len(dedupe_repeated_sentences(turns)) == 1
+
+
 def test_assemble_audio_time_stretch_slows_speech(tmp_path: Path) -> None:
     import pytest
 
@@ -540,11 +600,11 @@ def test_scene_writer_tops_up_short_scripts() -> None:
     llm = CountingLLM()
     script = SceneScriptWriter(llm).build({"title": "Demo", "story": {}, "teaching": [], "material": {}}, target_words=400)
 
-    # 1 body + 3 top-up rounds + finale = 5 dialogue calls, every turn unique
-    assert llm.calls == 5
+    # 1 body + 1 quality-limited top-up + finale = 3 dialogue calls.
+    assert llm.calls == 3
     texts = [t["text"] for t in script["dialogue"]]
     assert len(texts) == len(set(texts))
-    assert len(texts) == 10
+    assert len(texts) == 6
 
 
 def test_research_agent_ranks_results_by_title_overlap() -> None:
@@ -703,6 +763,32 @@ def test_cartesia_continuations_preserve_exact_text() -> None:
 
     assert len(chunks) > 1
     assert "".join(chunks) == transcript
+
+
+def test_pipeline_writes_cartesia_tts_manifest(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "notes.txt"
+    source.write_text("This is a short document with a clear point.", encoding="utf-8")
+
+    class FakeTTS:
+        model_id = "sonic-3.6"
+
+        def synthesize(self, _text: str, output_path: str, voice: str | None = None) -> str:
+            sf.write(output_path, [0.0, 0.1, 0.2], 8000)
+            return output_path
+
+    monkeypatch.setattr("podcast.cli.CartesiaTTS", lambda: FakeTTS())
+    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out, **kwargs: str(Path(out).write_bytes(b"x") or Path(out)))
+
+    run_pipeline(
+        str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1,
+        research=False, tts_backend="cartesia",
+    )
+
+    manifest = json.loads((tmp_path / "output" / "notes" / "tts_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["provider"] == "Cartesia"
+    assert manifest["model"] == "sonic-3.6"
+    assert manifest["voice_roles"]["HOST"]["name"] == "Skylar"
+    assert manifest["contexts"]["enabled"] is True
 
 
 def test_run_pipeline_generates_audio_file(tmp_path: Path, monkeypatch) -> None:

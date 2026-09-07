@@ -119,7 +119,7 @@ class SceneScriptWriter:
         section: dict[str, Any],
         index: int,
         total_sections: int,
-        previous_tail: list[dict[str, str]],
+        previous_dialogue: list[dict[str, str]],
         evidence: str,
     ) -> list[dict[str, str]]:
         outline_view = "\n".join(
@@ -135,7 +135,10 @@ class SceneScriptWriter:
         covered = "\n".join(
             f"- {s['title']}: {s['goal']}" for s in outline["sections"][:index]
         ) or "(nothing yet - this is the first section)"
-        tail = "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in previous_tail) or "(episode start)"
+        tail = "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in previous_dialogue[-4:]) or "(episode start)"
+        spoken_ledger = "\n".join(
+            f"{turn['speaker']}: {turn['text']}" for turn in previous_dialogue[:-4]
+        )[-12000:] or "(nothing yet - this is the first section)"
         beats = "\n".join(f"- {beat}" for beat in section.get("beats", [])) or "(use your judgement)"
         prompt = (
             f"You are writing section {index + 1} of {total_sections} of a podcast episode.\n\n"
@@ -147,6 +150,7 @@ class SceneScriptWriter:
             f"{position}\n\n"
             f"Evidence (the only source of factual claims):\n{evidence}\n\n"
             f"Already covered in earlier sections (do NOT re-explain any of this):\n{covered}\n\n"
+            f"Previously spoken dialogue (do not paraphrase or recap any claim here):\n{spoken_ledger}\n\n"
             f"Last lines of the previous section:\n{tail}\n"
             f"{STYLE_CONTRACT}\n"
             'Return JSON: {"dialogue": [{"speaker": "HOST", "text": "..."}, {"speaker": "EXPERT", "text": "..."}]}'
@@ -205,7 +209,7 @@ class SceneScriptWriter:
 
         for index, section in enumerate(body_sections):
             try:
-                turns = self._write_section(plan, outline, section, index, total_sections, dialogue[-4:], evidence)
+                turns = self._write_section(plan, outline, section, index, total_sections, dialogue, evidence)
                 dialogue.extend(turns)
                 # Drop repeated sentences as we go so later sections never see
                 # (or build on) recycled material.
@@ -219,7 +223,9 @@ class SceneScriptWriter:
             return sum(len(turn["text"].split()) for turn in dialogue)
 
         final_budget = int(final_section.get("target_words", 250)) if final_section else 0
-        for extra_round in range(3):
+        # One extra pass is enough to cover an omitted point. Repeated generic
+        # top-ups are where a small source tends to become a looping episode.
+        for extra_round in range(1):
             deficit = target_words - final_budget - _word_count()
             if deficit < int(target_words * 0.1):
                 break
@@ -235,7 +241,7 @@ class SceneScriptWriter:
             }
             try:
                 turns = self._write_section(
-                    plan, outline, topup_section, len(body_sections), total_sections, dialogue[-4:], evidence
+                    plan, outline, topup_section, len(body_sections), total_sections, dialogue, evidence
                 )
                 before = _word_count()
                 dialogue.extend(turns)
@@ -249,7 +255,7 @@ class SceneScriptWriter:
         if final_section is not None:
             try:
                 turns = self._write_section(
-                    plan, outline, final_section, total_sections - 1, total_sections, dialogue[-4:], evidence
+                    plan, outline, final_section, total_sections - 1, total_sections, dialogue, evidence
                 )
                 dialogue.extend(turns)
                 dialogue = dedupe_repeated_sentences(dialogue)
