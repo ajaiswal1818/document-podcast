@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dia = ["mlx-audio"]
+dia = ["mlx-audio", "librosa"]
 
 [project.scripts]
 document-podcast = "podcast.cli:main"

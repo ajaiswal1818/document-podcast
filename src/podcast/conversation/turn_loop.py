@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from podcast.agents.conversational_agent import ConversationalAgent
-from podcast.conversation.knowledge import render_evidence_for_agent
+from podcast.conversation.agent import ConversationalAgent
+from podcast.conversation.evidence import render_evidence_for_agent
 from podcast.research.researcher import ResearchAgent
 
 

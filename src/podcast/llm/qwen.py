@@ -49,6 +49,17 @@ class Qwen:
     def available(self) -> bool:
         return self.model is not None and self.tokenizer is not None and self.load_error is None
 
+    def release(self) -> None:
+        """Free model weights and the Metal cache so downstream models have headroom."""
+        self.model = None
+        self.tokenizer = None
+        try:
+            import mlx.core as mx
+
+            mx.clear_cache()
+        except Exception:
+            pass
+
     @staticmethod
     def _normalize_json_output(raw: str) -> str:
         text = raw.strip()

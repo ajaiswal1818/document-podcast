@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from podcast.conversation.knowledge import sanitize_speech_text
+from podcast.conversation.evidence import sanitize_speech_text
 
 from .base import TTSBackend
 

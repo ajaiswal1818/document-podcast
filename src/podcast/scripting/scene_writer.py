@@ -11,7 +11,11 @@ import json
 import sys
 from typing import Any
 
-from podcast.conversation.knowledge import render_evidence_for_agent, scrub_speech_text
+from podcast.conversation.evidence import (
+    dedupe_repeated_sentences,
+    render_evidence_for_agent,
+    scrub_speech_text,
+)
 
 STYLE_CONTRACT = """
 Style contract for the dialogue (follow all of these):
@@ -19,7 +23,8 @@ Style contract for the dialogue (follow all of these):
 - Sound like real people talking, not essays read aloud. Use contractions and occasional natural fillers ("I mean", "you know", "well").
 - Include brief back-channel turns between longer ones: "Right.", "Exactly.", "Oh wow.", "Hm, okay." A good scene has several of these.
 - Speak directly to the listener's job: a field marketing agent who talks to physicians. Tie the science to what they can say in a clinic conversation.
-- Keep the running metaphor of the episode alive: reference it, extend it, pay it off.
+- Reference the running metaphor sparingly: at most once per section, and vary how it is invoked.
+- NEVER repeat a sentence that has already been said anywhere in the episode, and never restate a point that was already made - build on it or move forward instead.
 - Vary turn length: some turns 2-6 words, most 20-50 words, a few deeper explanations of 60-100 words.
 - Translate every technical term into plain English the first time it appears.
 - Ground every factual claim in the provided material; never invent data, numbers, or outcomes.
@@ -127,6 +132,9 @@ class SceneScriptWriter:
             if index == total_sections - 1
             else "Continue seamlessly from the previous lines; do not re-introduce the show or the topic."
         )
+        covered = "\n".join(
+            f"- {s['title']}: {s['goal']}" for s in outline["sections"][:index]
+        ) or "(nothing yet - this is the first section)"
         tail = "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in previous_tail) or "(episode start)"
         beats = "\n".join(f"- {beat}" for beat in section.get("beats", [])) or "(use your judgement)"
         prompt = (
@@ -138,6 +146,7 @@ class SceneScriptWriter:
             f"Length: about {section.get('target_words', 400)} spoken words for this section.\n"
             f"{position}\n\n"
             f"Evidence (the only source of factual claims):\n{evidence}\n\n"
+            f"Already covered in earlier sections (do NOT re-explain any of this):\n{covered}\n\n"
             f"Last lines of the previous section:\n{tail}\n"
             f"{STYLE_CONTRACT}\n"
             'Return JSON: {"dialogue": [{"speaker": "HOST", "text": "..."}, {"speaker": "EXPERT", "text": "..."}]}'
@@ -156,7 +165,7 @@ class SceneScriptWriter:
                 speaker = "HOST" if speaker.startswith("H") else "EXPERT"
             text = scrub_speech_text(str(turn.get("text", "")).strip())
             if text:
-                turns.append({"speaker": speaker, "text": text})
+                turns.append({"speaker": speaker, "text": text, "section": index})
         return turns
 
     def build(self, plan: dict[str, Any], *, target_words: int = 2000) -> dict[str, Any]:
@@ -183,14 +192,69 @@ class SceneScriptWriter:
                     evidence_parts.append(citation)
         evidence = "\n".join(part for part in evidence_parts if part)[:6000]
 
+        # Models undershoot word budgets, and dedupe strips repetition afterwards;
+        # inflate the per-section ask so the post-dedupe total lands near target.
+        for section in outline["sections"]:
+            section["target_words"] = int(section.get("target_words", 300) * 1.35)
+
         dialogue: list[dict[str, str]] = []
-        total_sections = len(outline["sections"])
-        for index, section in enumerate(outline["sections"]):
+        sections = outline["sections"]
+        total_sections = len(sections)
+        body_sections = sections[:-1] if total_sections > 1 else sections
+        final_section = sections[-1] if total_sections > 1 else None
+
+        for index, section in enumerate(body_sections):
             try:
                 turns = self._write_section(plan, outline, section, index, total_sections, dialogue[-4:], evidence)
                 dialogue.extend(turns)
+                # Drop repeated sentences as we go so later sections never see
+                # (or build on) recycled material.
+                dialogue = dedupe_repeated_sentences(dialogue)
             except Exception as exc:
                 print(f"Warning: section '{section.get('title')}' failed, skipping: {exc}", file=sys.stderr)
+
+        # Top-up pass: dedupe can leave the episode short of budget. Write extra
+        # deep-dive sections before the finale until the target is met.
+        def _word_count() -> int:
+            return sum(len(turn["text"].split()) for turn in dialogue)
+
+        final_budget = int(final_section.get("target_words", 250)) if final_section else 0
+        for extra_round in range(3):
+            deficit = target_words - final_budget - _word_count()
+            if deficit < int(target_words * 0.1):
+                break
+            topup_section = {
+                "title": f"Going deeper ({extra_round + 1})",
+                "goal": (
+                    "Explore the most important material that has NOT been discussed yet: "
+                    "implications, concrete examples, what the listener should ask or say in the field. "
+                    "Everything here must be new - no repetition of earlier points."
+                ),
+                "beats": [],
+                "target_words": min(600, max(200, deficit)),
+            }
+            try:
+                turns = self._write_section(
+                    plan, outline, topup_section, len(body_sections), total_sections, dialogue[-4:], evidence
+                )
+                before = _word_count()
+                dialogue.extend(turns)
+                dialogue = dedupe_repeated_sentences(dialogue)
+                if _word_count() <= before:
+                    break  # the model has run dry; more rounds would only repeat
+            except Exception as exc:
+                print(f"Warning: top-up section failed: {exc}", file=sys.stderr)
+                break
+
+        if final_section is not None:
+            try:
+                turns = self._write_section(
+                    plan, outline, final_section, total_sections - 1, total_sections, dialogue[-4:], evidence
+                )
+                dialogue.extend(turns)
+                dialogue = dedupe_repeated_sentences(dialogue)
+            except Exception as exc:
+                print(f"Warning: final section failed: {exc}", file=sys.stderr)
 
         if len(dialogue) < 2:
             raise ValueError("Scene-based script generation produced too little dialogue.")

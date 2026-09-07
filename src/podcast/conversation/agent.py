@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from podcast.conversation.knowledge import render_evidence_for_agent, scrub_speech_text
+from podcast.conversation.evidence import render_evidence_for_agent, scrub_speech_text
 
 
 class ConversationalAgent:

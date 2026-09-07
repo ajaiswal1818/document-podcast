@@ -4,24 +4,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 from pathlib import Path
+
+import soundfile as sf
 
 import time
 from typing import Any
 
-from podcast.conversation.controller import ConversationController
-from podcast.conversation.knowledge import scrub_speech_text
+from podcast.conversation.turn_loop import ConversationController
+from podcast.conversation.evidence import dedupe_repeated_sentences, scrub_speech_text
 from podcast.document.parser import DocumentParser, chunk_text
 from podcast.llm.qwen import Qwen
-from podcast.podcast.dialogue import PodcastDialogue
-from podcast.podcast.editor import StoryEditor
-from podcast.podcast.planner import analyse_chunk, build_episode_plan, translate_technical_terms
-from podcast.podcast.scenes import SceneScriptWriter
-from podcast.podcast.story import build_story_blueprint
+from podcast.scripting.script_builder import PodcastDialogue
+from podcast.scripting.script_editor import StoryEditor
+from podcast.scripting.episode_planner import analyse_chunk, build_episode_plan, translate_technical_terms
+from podcast.scripting.scene_writer import SceneScriptWriter
+from podcast.scripting.story_blueprint import build_story_blueprint
 from podcast.research.researcher import ResearchAgent
 from podcast.tts import VibeVoiceTTS, get_tts_backend
-from podcast.tts.kokoro import KokoroTTS, assemble_audio_files
+from podcast.tts.assembly import assemble_audio_files
+from podcast.tts.kokoro import KokoroTTS
 
 
 def _make_tts_backend(name: str) -> Any:
@@ -54,6 +58,33 @@ def _record_step(metrics: list[dict[str, Any]], name: str, *, start_time: float 
 
 
 SPOKEN_WORDS_PER_MINUTE = 170
+NATURAL_SPEECH_WPM = 175
+
+_ACKNOWLEDGEMENT_OPENERS = {
+    "exactly", "right", "yeah", "yes", "oh", "wow", "totally", "absolutely",
+    "hm", "hmm", "okay", "ok", "true", "sure", "wait", "really", "no",
+}
+
+
+def _plan_turn_gaps(turns: list[dict[str, Any]]) -> list[float]:
+    """Humanize inter-turn timing: instant latch-ons for reactions, beats before deep dives.
+
+    Returns one pause duration (seconds) per boundary between consecutive turns.
+    """
+    gaps: list[float] = []
+    for previous, current in zip(turns, turns[1:]):
+        words = str(current.get("text", "")).split()
+        opener = words[0].strip(".,!?…'\"").lower() if words else ""
+        prev_section = previous.get("section")
+        if prev_section is not None and current.get("section") != prev_section:
+            gaps.append(random.uniform(0.7, 1.1))
+        elif len(words) <= 5 or opener in _ACKNOWLEDGEMENT_OPENERS:
+            gaps.append(random.uniform(0.0, 0.15))
+        elif len(words) > 60:
+            gaps.append(random.uniform(0.5, 0.9))
+        else:
+            gaps.append(random.uniform(0.2, 0.55))
+    return gaps
 
 
 def run_pipeline(
@@ -168,6 +199,7 @@ def run_pipeline(
     if not script.get("dialogue") or len(script.get("dialogue", [])) < 2:
         script = dialogue_builder.build(plan)
 
+    script["dialogue"] = dedupe_repeated_sentences(script.get("dialogue", []))
     verdict = editor.review(script, story_blueprint, target_words=target_words)
     critical_checks = {"dialogue_is_diverse", "no_metadata_leakage"}
     for _attempt in range(2):
@@ -188,6 +220,10 @@ def run_pipeline(
     _record_step(benchmark_steps, "generate_dialogue", start_time=dialogue_started, tokens=max(1, script_chars // 4), chars=script_chars)
     (target_dir / "podcast_script.json").write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # Script work is done; free the LLM's memory before loading TTS models.
+    if hasattr(llm, "release"):
+        llm.release()
+
     tts = _make_tts_backend(tts_backend)
     voice_map = {"HOST": "af_heart", "EXPERT": "am_adam"}
     audio_files: list[str] = []
@@ -201,7 +237,9 @@ def run_pipeline(
             start_time=tts_start,
             chars=sum(len(str(turn.get("text", ""))) for turn in dialogue_turns),
         )
+        spoken_turns: list[dict[str, Any]] = []
     else:
+        spoken_turns = []
         for turn_index, turn in enumerate(dialogue_turns, start=1):
             speaker = str(turn.get("speaker", "HOST")).strip() or "HOST"
             text = scrub_speech_text(str(turn.get("text", "")).strip())
@@ -212,11 +250,26 @@ def run_pipeline(
             tts.synthesize(text, str(segment_path), voice=voice_map.get(speaker, "am_adam"))
             _record_step(benchmark_steps, f"tts_{speaker.lower()}_{turn_index}", start_time=tts_start, chars=len(text))
             audio_files.append(str(segment_path))
+            spoken_turns.append({**turn, "text": text})
 
     if audio_files:
         final_audio_path = target_dir / "podcast.wav"
         assemble_started = time.perf_counter()
-        assemble_audio_files(audio_files, str(final_audio_path))
+        if spoken_turns:
+            assemble_audio_files(audio_files, str(final_audio_path), gaps=_plan_turn_gaps(spoken_turns))
+        else:
+            # Dia chunks already contain multi-turn prosody; join them tightly.
+            # Dia also over-paces its delivery, so calibrate a pitch-preserving
+            # slow-down from the measured words-per-minute of the raw chunks.
+            words = sum(len(scrub_speech_text(str(turn.get("text", "")).strip()).split()) for turn in dialogue_turns)
+            seconds = sum(sf.info(path).duration for path in audio_files)
+            stretch_rate = None
+            if words and seconds:
+                actual_wpm = words / (seconds / 60)
+                stretch_rate = max(0.75, min(1.0, NATURAL_SPEECH_WPM / actual_wpm))
+                if stretch_rate >= 0.97:
+                    stretch_rate = None
+            assemble_audio_files(audio_files, str(final_audio_path), gap_seconds=0.15, stretch_rate=stretch_rate)
         _record_step(benchmark_steps, "assemble_audio", start_time=assemble_started, chars=sum(len(str(path)) for path in audio_files))
         (target_dir / "audio_manifest.json").write_text(
             json.dumps({"audio_files": audio_files, "output": str(final_audio_path)}, ensure_ascii=False, indent=2),

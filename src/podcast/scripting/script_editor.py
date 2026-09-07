@@ -87,6 +87,20 @@ class StoryEditor:
             re.search(pattern, text, flags=re.IGNORECASE) for text in turn_texts for pattern in _LEAK_PATTERNS
         )
 
+        seen_sentences: set[str] = set()
+        no_repeated_sentences = True
+        for text in turn_texts:
+            for sentence in re.split(r"(?<=[.!?…])\s+", text):
+                normalized = re.sub(r"[^a-z0-9 ]", "", sentence.lower()).strip()
+                if len(normalized.split()) < 6:
+                    continue
+                if normalized in seen_sentences:
+                    no_repeated_sentences = False
+                    break
+                seen_sentences.add(normalized)
+            if not no_repeated_sentences:
+                break
+
         checks = {
             "has_two_humans": bool(script.get("speakers")),
             "host_asks_questions": host_questions >= 1,
@@ -97,6 +111,7 @@ class StoryEditor:
             "facts_are_present": bool(dialogue),
             "dialogue_is_diverse": dialogue_is_diverse,
             "no_metadata_leakage": no_metadata_leakage,
+            "no_repeated_sentences": no_repeated_sentences,
         }
         if target_words:
             total_words = sum(len(text.split()) for text in turn_texts)
@@ -137,6 +152,8 @@ class StoryEditor:
             questions.append("Every turn must say something new; do not repeat the same sentence or restate the same point across turns.")
         if "no_metadata_leakage" in failed:
             questions.append("Remove all internal bookkeeping from the spoken text: no source references, chunk numbers, ids, scores, or dict/JSON fragments.")
+        if "no_repeated_sentences" in failed:
+            questions.append("Never repeat a sentence or restate a point already made anywhere in the episode; every sentence must be new.")
         if "meets_target_length" in failed:
             questions.append(
                 "The conversation is far too short for the episode. Expand it substantially: go deeper on each concept with "

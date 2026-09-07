@@ -15,7 +15,14 @@ A local-first podcast generation pipeline for Apple Silicon. This v0.1 targets a
 - `models/` for local model artifacts
 - `data/input/` for source PDFs or text files
 - `data/output/` for generated artifacts
-- `src/podcast/` for the package code
+- `src/podcast/` for the package code:
+  - `cli.py` — entry point and pipeline orchestration
+  - `document/parser.py` — PDF/text extraction and chunking
+  - `research/researcher.py` — scholarly retrieval (Europe PMC / Crossref, open-access full text)
+  - `scripting/` — script generation: `episode_planner.py`, `story_blueprint.py`, `scene_writer.py` (primary), `script_builder.py` (single-shot fallback), `script_editor.py` (quality gate)
+  - `conversation/` — turn-loop fallback: `turn_loop.py`, `agent.py`, `evidence.py` (metadata/speech hygiene)
+  - `llm/qwen.py` — MLX Qwen wrapper
+  - `tts/` — speech: `kokoro.py` (default), `dia.py` (whole-conversation prosody, optional), `assembly.py` (pauses, loudness, final join)
 
 ## Quick start
 

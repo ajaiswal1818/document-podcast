@@ -6,7 +6,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 
-from .story import build_story_blueprint
+from .story_blueprint import build_story_blueprint
 
 SYSTEM_PROMPT = """
 You are a medical-storytelling analyst for a marketing and field-sales audience.

@@ -84,6 +84,38 @@ def render_evidence_for_agent(evidence: list[dict[str, Any]] | tuple[dict[str, A
     return "\n".join(f"- {claim}" for claim in unique_claims)
 
 
+def dedupe_repeated_sentences(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove sentences that verbatim (or near-verbatim) repeat earlier ones across a script.
+
+    Short interjections ("Right.", "Exactly.") are exempt; substantive sentences
+    (6+ words) must each be said only once in the whole episode.
+    """
+    import difflib
+
+    seen: list[str] = []
+    result: list[dict[str, Any]] = []
+    for turn in turns:
+        text = str(turn.get("text", ""))
+        sentences = re.split(r"(?<=[.!?…])\s+", text)
+        kept: list[str] = []
+        for sentence in sentences:
+            normalized = re.sub(r"[^a-z0-9 ]", "", sentence.lower()).strip()
+            if len(normalized.split()) >= 6:
+                is_duplicate = normalized in seen or any(
+                    abs(len(prior) - len(normalized)) < 30
+                    and difflib.SequenceMatcher(None, normalized, prior).ratio() > 0.92
+                    for prior in seen
+                )
+                if is_duplicate:
+                    continue
+                seen.append(normalized)
+            kept.append(sentence)
+        new_text = " ".join(part for part in kept if part.strip()).strip()
+        if new_text:
+            result.append({**turn, "text": new_text})
+    return result
+
+
 def scrub_speech_text(text: str) -> str:
     """Remove internal metadata artifacts from speech text instead of rejecting it.
 

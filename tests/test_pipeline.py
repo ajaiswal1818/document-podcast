@@ -6,10 +6,10 @@ import soundfile as sf
 
 from podcast.cli import run_pipeline
 from podcast.document.parser import DocumentParser, chunk_text, extract_pdf
-from podcast.podcast.dialogue import PodcastDialogue
-from podcast.podcast.editor import StoryEditor
-from podcast.podcast.planner import build_episode_plan, build_story_blueprint, translate_technical_terms
-from podcast.tts.kokoro import assemble_audio_files
+from podcast.scripting.script_builder import PodcastDialogue
+from podcast.scripting.script_editor import StoryEditor
+from podcast.scripting.episode_planner import build_episode_plan, build_story_blueprint, translate_technical_terms
+from podcast.tts.assembly import assemble_audio_files
 
 
 class FakeLLM:
@@ -184,8 +184,8 @@ def test_story_editor_requires_story_arc_and_takeaway() -> None:
 
 
 def test_conversation_controller_uses_stateful_turns() -> None:
-    from podcast.agents.conversational_agent import ConversationalAgent
-    from podcast.conversation.controller import ConversationController, ConversationState
+    from podcast.conversation.agent import ConversationalAgent
+    from podcast.conversation.turn_loop import ConversationController, ConversationState
 
     state = ConversationState("demo topic")
     state.add_turn("A", "Why does this matter?")
@@ -246,7 +246,7 @@ def test_run_pipeline_uses_stateful_controller_for_dialogue(tmp_path: Path, monk
     monkeypatch.setattr("podcast.cli.SceneScriptWriter", FailingSceneWriter)
     monkeypatch.setattr("podcast.cli.ConversationController", FakeController)
     monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: FakeTTS())
-    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
+    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out, **kwargs: str(Path(out).write_bytes(b"x") or Path(out)))
 
     result = run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1, research=False)
 
@@ -255,8 +255,8 @@ def test_run_pipeline_uses_stateful_controller_for_dialogue(tmp_path: Path, monk
 
 
 def test_conversational_agent_prompts_for_reaction_before_explaining() -> None:
-    from podcast.agents.conversational_agent import ConversationalAgent
-    from podcast.conversation.controller import ConversationState
+    from podcast.conversation.agent import ConversationalAgent
+    from podcast.conversation.turn_loop import ConversationState
 
     class CaptureLLM:
         available = True
@@ -279,7 +279,7 @@ def test_conversational_agent_prompts_for_reaction_before_explaining() -> None:
 
 
 def test_conversation_state_allows_longer_podcast_blocks() -> None:
-    from podcast.conversation.controller import ConversationState
+    from podcast.conversation.turn_loop import ConversationState
 
     state = ConversationState("demo topic")
     for i in range(16):
@@ -289,8 +289,8 @@ def test_conversation_state_allows_longer_podcast_blocks() -> None:
 
 
 def test_conversational_agent_hides_internal_metadata_from_prompt() -> None:
-    from podcast.agents.conversational_agent import ConversationalAgent
-    from podcast.conversation.controller import ConversationState
+    from podcast.conversation.agent import ConversationalAgent
+    from podcast.conversation.turn_loop import ConversationState
 
     class CaptureLLM:
         available = True
@@ -365,11 +365,117 @@ def test_research_agent_fetches_real_web_evidence(monkeypatch) -> None:
     assert "delayed clue" in result["findings"][0]["claim"]
 
 
+def test_turn_gaps_are_context_aware() -> None:
+    from podcast.cli import _plan_turn_gaps
+
+    turns = [
+        {"speaker": "HOST", "text": "So the ascites was the first clue the team could not explain.", "section": 0},
+        {"speaker": "EXPERT", "text": "Exactly.", "section": 0},
+        {"speaker": "HOST", "text": "And that is where the antibody test changed the whole picture for the team.", "section": 0},
+        {"speaker": "EXPERT", "text": " ".join(["word"] * 70), "section": 0},
+        {"speaker": "HOST", "text": "Now let us step back and look at what this means for the field.", "section": 1},
+    ]
+    gaps = _plan_turn_gaps(turns)
+
+    assert len(gaps) == 4
+    assert 0.0 <= gaps[0] <= 0.15  # reaction latches on almost instantly
+    assert 0.2 <= gaps[1] <= 0.55  # normal turn
+    assert 0.5 <= gaps[2] <= 0.9  # beat before a long explanation
+    assert 0.7 <= gaps[3] <= 1.1  # section transition breathes
+
+
+def test_assemble_audio_uses_per_boundary_gaps(tmp_path: Path) -> None:
+    import numpy as np
+
+    clip = np.full(800, 0.1, dtype=np.float32)
+    paths = []
+    for index in range(3):
+        path = tmp_path / f"clip{index}.wav"
+        sf.write(path, clip, 8000)
+        paths.append(str(path))
+
+    out = tmp_path / "joined.wav"
+    assemble_audio_files(paths, str(out), gaps=[0.0, 0.5])
+
+    data, sr = sf.read(out)
+    assert sr == 8000
+    assert len(data) == 800 * 3 + int(0.5 * 8000)
+
+
+def test_dedupe_removes_repeated_sentences_across_turns() -> None:
+    from podcast.conversation.evidence import dedupe_repeated_sentences
+
+    turns = [
+        {"speaker": "HOST", "text": "The ascites was the first clue nobody could explain at the time."},
+        {"speaker": "EXPERT", "text": "Right. The antibody test finally revealed the underlying autoimmune disease."},
+        {"speaker": "HOST", "text": "The ascites was the first clue nobody could explain at the time. So what happened next?"},
+        {"speaker": "EXPERT", "text": "Exactly."},
+        {"speaker": "EXPERT", "text": "The antibody test finally revealed the underlying autoimmune disease!"},
+    ]
+    result = dedupe_repeated_sentences(turns)
+
+    texts = [t["text"] for t in result]
+    assert texts[2] == "So what happened next?"  # repeated sentence stripped, fresh part kept
+    assert "Exactly." in texts  # short back-channels are exempt
+    assert len(result) == 4  # turn 5 was entirely a repeat and got dropped
+
+
+def test_assemble_audio_time_stretch_slows_speech(tmp_path: Path) -> None:
+    import pytest
+
+    pytest.importorskip("librosa")
+    import numpy as np
+
+    clip = (0.1 * np.sin(np.linspace(0, 440 * 2 * np.pi, 22050))).astype(np.float32)
+    path = tmp_path / "clip.wav"
+    sf.write(path, clip, 22050)
+
+    out = tmp_path / "stretched.wav"
+    assemble_audio_files([str(path)], str(out), stretch_rate=0.8)
+
+    stretched, sr = sf.read(out)
+    assert len(stretched) > len(clip) * 1.15  # 1/0.8 = 1.25x longer, allow codec slack
+
+
+def test_dia_chunks_always_start_with_s1() -> None:
+    from podcast.tts.dia import DiaTTS
+
+    long_text = " ".join(["word"] * 25) + "."
+    turns = []
+    for i in range(12):
+        speaker = "HOST" if i % 2 == 0 else "EXPERT"
+        turns.append({"speaker": speaker, "text": long_text})
+    # Consecutive EXPERT turns force chunk boundaries that would land on [S2].
+    turns.insert(5, {"speaker": "EXPERT", "text": long_text})
+
+    chunks = DiaTTS.build_chunks(turns)
+
+    assert len(chunks) > 1
+    assert all(chunk.startswith("[S1]") for chunk in chunks)
+    assert all(len(chunk) <= 260 for chunk in chunks)  # pace + encoder limits
+    joined = " ".join(chunks)
+    assert joined.count("[S1]") + joined.count("[S2]") == len(turns)
+
+
+def test_dia_chunks_split_oversized_single_turn() -> None:
+    from podcast.tts.dia import DiaTTS
+
+    monologue = " ".join(f"Sentence number {i} keeps going with plenty of extra words to add length." for i in range(30))
+    chunks = DiaTTS.build_chunks([{"speaker": "EXPERT", "text": monologue}])
+
+    assert len(chunks) > 1
+    assert all(chunk.startswith("[S1]") for chunk in chunks)
+    assert all(len(chunk) <= 260 for chunk in chunks)
+
+
 def test_scene_writer_builds_multi_section_script() -> None:
-    from podcast.podcast.scenes import SceneScriptWriter
+    from podcast.scripting.scene_writer import SceneScriptWriter
 
     class FakeSceneLLM:
         available = True
+
+        def __init__(self) -> None:
+            self.section_calls = 0
 
         def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
             if "outline" in user.lower() and "running_metaphor" in user:
@@ -378,18 +484,67 @@ def test_scene_writer_builds_multi_section_script() -> None:
                     '{"title": "Cold open", "goal": "start in the scene", "beats": ["the belly"], "target_words": 100},'
                     '{"title": "Landing it", "goal": "close", "beats": [], "target_words": 100}]}'
                 )
+            self.section_calls += 1
+            if self.section_calls == 1:
+                return (
+                    '{"dialogue": [{"speaker": "HOST", "text": "Her belly was massive, and yet she felt no pain at all."},'
+                    '{"speaker": "EXPERT", "text": "Right. And that contradiction is exactly where this mystery starts."}]}'
+                )
             return (
-                '{"dialogue": [{"speaker": "HOST", "text": "Her belly was massive, and yet she felt no pain at all."},'
-                '{"speaker": "EXPERT", "text": "Right. And that contradiction is exactly where this mystery starts."}]}'
+                '{"dialogue": [{"speaker": "HOST", "text": "So the antibody test is what finally unlocked the room."},'
+                '{"speaker": "EXPERT", "text": "Exactly. And that is the takeaway worth carrying into every clinic visit."}]}'
             )
 
     writer = SceneScriptWriter(FakeSceneLLM())
-    script = writer.build({"title": "Demo", "story": {}, "teaching": [], "material": {"main_ideas": ["The case"]}}, target_words=200)
+    # Small target: body + finale cover it, so no top-up rounds trigger.
+    script = writer.build({"title": "Demo", "story": {}, "teaching": [], "material": {"main_ideas": ["The case"]}}, target_words=150)
 
     assert script["speakers"] == ["HOST", "EXPERT"]
     assert len(script["dialogue"]) == 4
     assert script["outline"]["running_metaphor"] == "a locked room mystery"
     assert all(turn["speaker"] in {"HOST", "EXPERT"} for turn in script["dialogue"])
+
+
+def test_scene_writer_tops_up_short_scripts() -> None:
+    from podcast.scripting.scene_writer import SceneScriptWriter
+
+    class CountingLLM:
+        available = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+            if "running_metaphor" in user:
+                return (
+                    '{"running_metaphor": "a maze", "sections": ['
+                    '{"title": "Open", "goal": "start", "beats": [], "target_words": 50},'
+                    '{"title": "Close", "goal": "end", "beats": [], "target_words": 50}]}'
+                )
+            self.calls += 1
+            pairs = [
+                ("So walk me through what the ascites fluid actually told the team.", "The fluid analysis ruled out infection and malignancy, which narrowed the differential dramatically."),
+                ("What made the antibody panel the turning point here?", "A strongly positive anti-double-stranded DNA result pointed squarely at lupus despite the odd presentation."),
+                ("How quickly did treatment change her condition?", "Hydroxychloroquine plus low-dose steroids resolved the swelling completely by the follow-up visit."),
+                ("What should a rep actually say to a physician about this case?", "Lead with the surprise: abdominal fluid with painless distension can be lupus knocking, not liver failure."),
+                ("Any final word for the skeptics in the audience?", "Trust the workup over the textbook picture, because atypical presentations are where diagnoses go wrong."),
+            ]
+            host_text, expert_text = pairs[(self.calls - 1) % len(pairs)]
+            return json.dumps({
+                "dialogue": [
+                    {"speaker": "HOST", "text": host_text},
+                    {"speaker": "EXPERT", "text": expert_text},
+                ]
+            })
+
+    llm = CountingLLM()
+    script = SceneScriptWriter(llm).build({"title": "Demo", "story": {}, "teaching": [], "material": {}}, target_words=400)
+
+    # 1 body + 3 top-up rounds + finale = 5 dialogue calls, every turn unique
+    assert llm.calls == 5
+    texts = [t["text"] for t in script["dialogue"]]
+    assert len(texts) == len(set(texts))
+    assert len(texts) == 10
 
 
 def test_research_agent_ranks_results_by_title_overlap() -> None:
@@ -416,7 +571,7 @@ def test_research_agent_stores_sources_for_agent_requests() -> None:
 
 
 def test_render_evidence_for_agent_omits_metadata_fields() -> None:
-    from podcast.conversation.knowledge import render_evidence_for_agent
+    from podcast.conversation.evidence import render_evidence_for_agent
 
     evidence = [
         {"claim": "The patient had recurrent ascites.", "source": {"chunk": 4, "page": 12}, "id": "C17"},
@@ -432,7 +587,7 @@ def test_render_evidence_for_agent_omits_metadata_fields() -> None:
 
 
 def test_speech_sanitizer_rejects_internal_metadata_patterns() -> None:
-    from podcast.conversation.knowledge import sanitize_speech_text
+    from podcast.conversation.evidence import sanitize_speech_text
 
     bad_text = "According to source chunk 4, the patient had recurrent ascites."
     ok_text = "The patient had recurrent ascites despite the initial treatment."
@@ -469,7 +624,7 @@ def test_run_pipeline_regenerates_when_story_editor_rejects(tmp_path: Path, monk
 
     llm = FakeRegeneratingLLM()
     monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: FakeTTS())
-    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
+    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out, **kwargs: str(Path(out).write_bytes(b"x") or Path(out)))
 
     run_pipeline(str(source), output_dir=tmp_path / "output", llm=llm, max_chunks=1, research=False)
 
@@ -499,7 +654,7 @@ def test_run_pipeline_generates_audio_file(tmp_path: Path, monkeypatch) -> None:
 
     fake_tts = FakeTTS()
     monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: fake_tts)
-    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
+    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out, **kwargs: str(Path(out).write_bytes(b"x") or Path(out)))
 
     result = run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1, research=False)
 
@@ -521,7 +676,7 @@ def test_run_pipeline_records_benchmark_metrics(tmp_path: Path, monkeypatch) -> 
             return output_path
 
     monkeypatch.setattr("podcast.cli.KokoroTTS", lambda: FakeTTS())
-    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out: str(Path(out).write_bytes(b"x") or Path(out)))
+    monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out, **kwargs: str(Path(out).write_bytes(b"x") or Path(out)))
 
     run_pipeline(str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1, research=False)
 
