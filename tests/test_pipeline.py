@@ -147,6 +147,43 @@ def test_cli_auto_selection_uses_configured_api_keys(monkeypatch) -> None:
     assert _resolve_tts_backend("auto") == "cartesia"
 
 
+def test_research_keeps_only_strong_title_matches(monkeypatch) -> None:
+    from podcast.research.researcher import ResearchAgent
+
+    query = "Chronic ascites as the initial presentation of lupus"
+    agent = ResearchAgent()
+    monkeypatch.setattr(
+        agent,
+        "_search_ranked",
+        lambda _query: [
+            {"title": query, "isOpenAccess": "N", "doi": "10.1/exact"},
+            {"title": "Lupus in an unrelated child case", "isOpenAccess": "N", "doi": "10.1/loose"},
+        ],
+    )
+
+    report = agent.research_document(query)
+
+    assert [source["doi"] for source in report["sources"]] == ["10.1/exact"]
+    assert report["sources"][0]["verified"] is True
+    assert report["verification"]["all_sources_verified"] is True
+
+
+def test_dialogue_word_cap_preserves_the_ending() -> None:
+    from podcast.cli import _cap_dialogue_words, _word_count
+
+    dialogue = [
+        {"speaker": "HOST", "text": " ".join([f"opening{i}" for i in range(80)]) + "."},
+        {"speaker": "EXPERT", "text": " ".join([f"middle{i}" for i in range(80)]) + "."},
+        {"speaker": "HOST", "text": " ".join([f"closing{i}" for i in range(20)]) + "."},
+        {"speaker": "EXPERT", "text": "The final takeaway remains available to the listener."},
+    ]
+
+    capped = _cap_dialogue_words(dialogue, 120)
+
+    assert _word_count(capped) <= 120
+    assert capped[-1]["text"] == "The final takeaway remains available to the listener."
+
+
 def test_episode_plan_tracks_source_chunks() -> None:
     plan = build_episode_plan([
         {"facts": ["A fact"], "numbers": ["42"], "main_ideas": ["Idea 1"]},

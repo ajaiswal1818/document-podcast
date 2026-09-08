@@ -10,7 +10,7 @@ from typing import Any
 from openai import OpenAI
 
 
-DEFAULT_MODEL = "gpt-5.6"
+DEFAULT_MODEL = "gpt-4"
 
 
 def _load_project_env() -> None:

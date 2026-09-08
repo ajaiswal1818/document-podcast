@@ -80,7 +80,8 @@ class SceneScriptWriter:
             f"Teaching points: {json.dumps(teaching, ensure_ascii=False)}\n"
             f"Summary: {summary}\n\n"
             f"The episode should be about {target_words} spoken words total, in 5-7 sections.\n"
-            "The first section is a cold open that starts inside the story (never 'welcome to the show'). "
+            "The first section opens with a vivid moment, then immediately orients the listener: introduce who the story is about, "
+            "what is happening, and the central question they will follow. Never use a generic 'welcome to the show'. "
             "The last section lands the big takeaway and closes naturally.\n"
             "Pick one vivid running metaphor for the whole episode.\n\n"
             'Return JSON: {"running_metaphor": "...", "sections": [{"title": "...", "goal": "...", '
@@ -126,7 +127,9 @@ class SceneScriptWriter:
             f"{i + 1}. {s['title']}: {s['goal']}" for i, s in enumerate(outline["sections"])
         )
         position = (
-            "This is the COLD OPEN: start inside the story, mid-scene, with the most striking detail. No greetings, no 'welcome'."
+            "This is the COLD OPEN: begin with one vivid moment, then in the first 120 spoken words clearly introduce "
+            "the person or situation, what is at stake, and the central mystery this episode will resolve. "
+            "No generic greeting or 'welcome to the show'."
             if index == 0
             else "This is the FINAL section: pay off the running metaphor, land the big takeaway, and close the conversation naturally."
             if index == total_sections - 1
@@ -196,11 +199,6 @@ class SceneScriptWriter:
                     evidence_parts.append(citation)
         evidence = "\n".join(part for part in evidence_parts if part)[:6000]
 
-        # Models undershoot word budgets, and dedupe strips repetition afterwards;
-        # inflate the per-section ask so the post-dedupe total lands near target.
-        for section in outline["sections"]:
-            section["target_words"] = int(section.get("target_words", 300) * 1.35)
-
         dialogue: list[dict[str, str]] = []
         sections = outline["sections"]
         total_sections = len(sections)
@@ -227,7 +225,9 @@ class SceneScriptWriter:
         # top-ups are where a small source tends to become a looping episode.
         for extra_round in range(1):
             deficit = target_words - final_budget - _word_count()
-            if deficit < int(target_words * 0.1):
+            # A small shortfall is preferable to padding a complete story with
+            # generic material. Only request a top-up for a substantial gap.
+            if deficit < max(150, int(target_words * 0.1)):
                 break
             topup_section = {
                 "title": f"Going deeper ({extra_round + 1})",

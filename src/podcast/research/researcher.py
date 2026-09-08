@@ -69,6 +69,7 @@ class ResearchAgent:
         "a", "an", "the", "of", "in", "on", "as", "and", "or", "with", "for", "to", "by",
         "case", "report", "study", "presenting", "presentation", "patient", "initial",
     }
+    _MINIMUM_VERIFIED_TITLE_OVERLAP = 0.75
 
     def _europe_pmc_search(self, query: str) -> list[dict[str, Any]]:
         url = EUROPE_PMC_SEARCH.format(query=quote_plus(query))
@@ -136,11 +137,21 @@ class ResearchAgent:
 
         results = self._search_ranked(query)
 
-        for result in results[:max_sources]:
+        rejected_source_count = 0
+        for result in results:
+            if len(sources) >= max_sources:
+                break
             if not isinstance(result, dict):
                 continue
+            title = _strip_markup(str(result.get("title", "")))
+            title_overlap = self._title_overlap(query, title)
+            # Research adds external claims to the podcast. Do not admit a paper
+            # merely because it shares a broad disease name with the source.
+            if title_overlap < self._MINIMUM_VERIFIED_TITLE_OVERLAP:
+                rejected_source_count += 1
+                continue
             entry: dict[str, Any] = {
-                "title": _strip_markup(str(result.get("title", ""))),
+                "title": title,
                 "authors": str(result.get("authorString", "")),
                 "journal": str(result.get("journalInfo", {}).get("journal", {}).get("title", "")) if isinstance(result.get("journalInfo"), dict) else "",
                 "year": str(result.get("pubYear", "")),
@@ -148,6 +159,8 @@ class ResearchAgent:
                 "pmcid": str(result.get("pmcid", "")),
                 "open_access": result.get("isOpenAccess") == "Y",
                 "provider": "europe_pmc",
+                "title_overlap": round(title_overlap, 3),
+                "verified": True,
             }
             abstract = _strip_markup(str(result.get("abstractText", "")))
             if abstract:
@@ -170,13 +183,20 @@ class ResearchAgent:
 
         if not sources:
             try:
-                for item in self._crossref_search(query)[:max_sources]:
+                for item in self._crossref_search(query):
+                    if len(sources) >= max_sources:
+                        break
                     if not isinstance(item, dict):
                         continue
                     titles = item.get("title") or []
+                    title = _strip_markup(str(titles[0])) if titles else ""
+                    title_overlap = self._title_overlap(query, title)
+                    if title_overlap < self._MINIMUM_VERIFIED_TITLE_OVERLAP:
+                        rejected_source_count += 1
+                        continue
                     sources.append(
                         {
-                            "title": _strip_markup(str(titles[0])) if titles else "",
+                            "title": title,
                             "authors": ", ".join(
                                 str(author.get("family", "")) for author in item.get("author", [])[:8]
                             ),
@@ -185,6 +205,8 @@ class ResearchAgent:
                             "abstract": _strip_markup(str(item.get("abstract", ""))),
                             "open_access": False,
                             "provider": "crossref",
+                            "title_overlap": round(title_overlap, 3),
+                            "verified": True,
                         }
                     )
             except Exception:
@@ -195,6 +217,12 @@ class ResearchAgent:
             "sources": sources,
             "full_texts": full_texts,
             "abstracts": [source["abstract"] for source in sources if source.get("abstract")],
+            "verification": {
+                "minimum_title_overlap": self._MINIMUM_VERIFIED_TITLE_OVERLAP,
+                "accepted_sources": len(sources),
+                "rejected_source_count": rejected_source_count,
+                "all_sources_verified": all(source.get("verified") for source in sources),
+            },
         }
         self.knowledge_pool.append(report)
         return report

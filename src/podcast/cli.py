@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -82,7 +83,10 @@ def _record_step(metrics: list[dict[str, Any]], name: str, *, start_time: float 
     return wall_time
 
 
-SPOKEN_WORDS_PER_MINUTE = 170
+MAX_EPISODE_MINUTES = 15.0
+# Conservative budget that leaves room for natural Cartesia pauses while keeping
+# a 15-minute requested episode below the hard audio-duration ceiling in practice.
+SPOKEN_WORDS_PER_MINUTE = 140
 NATURAL_SPEECH_WPM = 175
 
 _ACKNOWLEDGEMENT_OPENERS = {
@@ -110,6 +114,57 @@ def _plan_turn_gaps(turns: list[dict[str, Any]]) -> list[float]:
         else:
             gaps.append(random.uniform(0.2, 0.55))
     return gaps
+
+
+def _word_count(turns: list[dict[str, Any]]) -> int:
+    return sum(len(str(turn.get("text", "")).split()) for turn in turns)
+
+
+def _trim_text_to_words(text: str, limit: int) -> str:
+    """Keep complete sentences where possible when enforcing an episode ceiling."""
+    words = text.split()
+    if len(words) <= limit:
+        return text
+    kept: list[str] = []
+    used = 0
+    for sentence in re.split(r"(?<=[.!?…])\s+", text):
+        sentence_words = sentence.split()
+        if used + len(sentence_words) > limit:
+            break
+        kept.append(sentence)
+        used += len(sentence_words)
+    return " ".join(kept).strip() or " ".join(words[:limit]).rstrip(".,;:") + "."
+
+
+def _cap_dialogue_words(dialogue: list[dict[str, Any]], max_words: int | None) -> list[dict[str, Any]]:
+    """Keep the story ending while enforcing the maximum configured duration."""
+    if not max_words or _word_count(dialogue) <= max_words:
+        return dialogue
+
+    closing = dialogue[-4:]
+    closing_words = _word_count(closing)
+    closing_budget = min(closing_words, max_words, max(120, max_words // 8))
+    if closing_words > closing_budget:
+        closing = []
+        remaining = closing_budget
+        for turn in reversed(dialogue[-4:]):
+            text = _trim_text_to_words(str(turn.get("text", "")), remaining)
+            if text:
+                closing.insert(0, {**turn, "text": text})
+                remaining -= len(text.split())
+            if remaining <= 0:
+                break
+
+    retained: list[dict[str, Any]] = []
+    remaining = max_words - _word_count(closing)
+    for turn in dialogue[:-4]:
+        text = _trim_text_to_words(str(turn.get("text", "")), remaining)
+        if text:
+            retained.append({**turn, "text": text})
+            remaining -= len(text.split())
+        if remaining <= 0:
+            break
+    return retained + closing
 
 
 def run_pipeline(
@@ -209,7 +264,10 @@ def run_pipeline(
         "audience": story_blueprint.get("audience", {}),
         "teaching": story_blueprint.get("teaching", []),
     }
-    target_words = int(target_minutes * SPOKEN_WORDS_PER_MINUTE) if target_minutes else None
+    effective_minutes = min(target_minutes, MAX_EPISODE_MINUTES) if target_minutes else None
+    if target_minutes and effective_minutes != target_minutes:
+        print(f"Script: limiting requested duration to {MAX_EPISODE_MINUTES:g} minutes.", file=sys.stderr)
+    target_words = int(effective_minutes * SPOKEN_WORDS_PER_MINUTE) if effective_minutes else None
 
     script: dict[str, Any] | None = None
     try:
@@ -225,7 +283,7 @@ def run_pipeline(
     if not script.get("dialogue") or len(script.get("dialogue", [])) < 2:
         script = dialogue_builder.build(plan)
 
-    script["dialogue"] = dedupe_repeated_sentences(script.get("dialogue", []))
+    script["dialogue"] = _cap_dialogue_words(dedupe_repeated_sentences(script.get("dialogue", [])), target_words)
     verdict = editor.review(script, story_blueprint, target_words=target_words)
     critical_checks = {"dialogue_is_diverse", "no_metadata_leakage"}
     for _attempt in range(2):
@@ -233,7 +291,7 @@ def run_pipeline(
             break
         regeneration_prompt = editor.build_regeneration_prompt(script, story_blueprint, verdict)
         candidate = dialogue_builder.build(plan, regeneration_prompt=regeneration_prompt)
-        candidate["dialogue"] = dedupe_repeated_sentences(candidate.get("dialogue", []))
+        candidate["dialogue"] = _cap_dialogue_words(dedupe_repeated_sentences(candidate.get("dialogue", [])), target_words)
         candidate_verdict = editor.review(candidate, story_blueprint, target_words=target_words)
         script_is_degenerate = critical_checks & set(verdict["failed_checks"])
         candidate_is_degenerate = critical_checks & set(candidate_verdict["failed_checks"])
@@ -241,7 +299,7 @@ def run_pipeline(
             candidate_verdict["failed_checks"]
         ) < len(verdict["failed_checks"]):
             script, verdict = candidate, candidate_verdict
-    script["dialogue"] = dedupe_repeated_sentences(script.get("dialogue", []))
+    script["dialogue"] = _cap_dialogue_words(dedupe_repeated_sentences(script.get("dialogue", [])), target_words)
     (target_dir / "editor_verdict.json").write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     script_chars = len(json.dumps(script, ensure_ascii=False))
@@ -396,9 +454,9 @@ def main() -> None:
             print(f"LLM: using OpenAI model={args.openai_model}.", file=sys.stderr)
         else:
             print(f"LLM: using local Qwen model={args.model_version}.", file=sys.stderr)
-        if args.llm != llm_backend:
+        if args.llm in {"auto", "openai"} and llm_backend == "qwen":
             print("LLM: OpenAI key not found; fell back to local Qwen.", file=sys.stderr)
-        if args.tts != tts_backend:
+        if args.tts in {"auto", "cartesia"} and tts_backend == "kokoro":
             print("TTS: Cartesia key not found; fell back to local Kokoro.", file=sys.stderr)
 
         result = run_pipeline(
