@@ -43,3 +43,7 @@ uv run document-podcast ./data/input/document.pdf
 ```
 
 Use `--llm qwen --tts kokoro` to force local providers. Programmatic `run_pipeline()` also remains local by default for tests.
+
+## Podcast language
+
+Use `--language nl` for a Dutch podcast. Cartesia then uses Noa (HOST) and Stijn (EXPERT), both Dutch catalog voices. English remains the default.

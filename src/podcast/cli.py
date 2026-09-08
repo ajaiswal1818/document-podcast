@@ -29,18 +29,18 @@ from podcast.scripting.story_blueprint import build_story_blueprint
 from podcast.research.researcher import ResearchAgent
 from podcast.tts import CartesiaTTS, VibeVoiceTTS, get_tts_backend
 from podcast.tts.assembly import assemble_audio_files
-from podcast.tts.cartesia import EXPERT_VOICE as CARTESIA_EXPERT_VOICE
-from podcast.tts.cartesia import HOST_VOICE as CARTESIA_HOST_VOICE
+from podcast.tts.cartesia import LANGUAGE_NAMES as CARTESIA_LANGUAGE_NAMES
+from podcast.tts.cartesia import get_voice_pair
 from podcast.tts.cartesia import has_cartesia_api_key
 from podcast.tts.kokoro import KokoroTTS
 
 
-def _make_tts_backend(name: str) -> Any:
+def _make_tts_backend(name: str, *, language: str = "en") -> Any:
     """Create a TTS backend while preserving compatibility with existing test monkeypatches."""
     backend_name = (name or "cartesia").lower()
     if backend_name == "cartesia":
         ctor = globals().get("CartesiaTTS") or get_tts_backend("cartesia").__class__
-        return ctor()
+        return ctor(language=language)
     if backend_name == "kokoro":
         ctor = globals().get("KokoroTTS") or get_tts_backend("kokoro").__class__
         return ctor()
@@ -175,6 +175,7 @@ def run_pipeline(
     max_chunks: int = 5,
     # Keep programmatic runs and tests local unless a backend is explicitly chosen.
     tts_backend: str = "kokoro",
+    language: str = "en",
     target_minutes: float = 15.0,
     research: bool = True,
 ) -> dict:
@@ -239,6 +240,7 @@ def run_pipeline(
     plan["story"] = story_blueprint.get("story", plan.get("story", {}))
     plan["audience"] = story_blueprint.get("audience", plan.get("audience", {}))
     plan["teaching"] = story_blueprint.get("teaching", plan.get("teaching", []))
+    plan["language"] = language
     if research_report:
         plan["research"] = {
             "query": research_report.get("query", ""),
@@ -311,9 +313,9 @@ def run_pipeline(
         llm.release()
 
     backend_name = (tts_backend or "kokoro").lower()
-    tts = _make_tts_backend(backend_name)
+    tts = _make_tts_backend(backend_name, language=language)
     voice_map = (
-        {"HOST": CARTESIA_HOST_VOICE, "EXPERT": CARTESIA_EXPERT_VOICE}
+        {speaker: profile["id"] for speaker, profile in get_voice_pair(language).items()}
         if backend_name == "cartesia"
         else {"HOST": "af_heart", "EXPERT": "am_adam"}
     )
@@ -326,16 +328,15 @@ def run_pipeline(
             {
                 "provider": "Cartesia",
                 "model": getattr(tts, "model_id", "sonic-3.6"),
-                "voice_roles": {
-                    "HOST": {"name": "Skylar", "id": CARTESIA_HOST_VOICE},
-                    "EXPERT": {"name": "Daniel", "id": CARTESIA_EXPERT_VOICE},
-                },
+                "language": language,
+                "voice_roles": get_voice_pair(language),
                 "contexts": {"enabled": True, "scope": "one context per spoken turn"},
             }
         )
         print(
-            "TTS: using Cartesia Sonic with Skylar (HOST) and Daniel (EXPERT); "
-            "WebSocket contexts enabled.",
+            f"TTS: using Cartesia Sonic in {CARTESIA_LANGUAGE_NAMES[language]} with "
+            f"{get_voice_pair(language)['HOST']['name']} (HOST) and "
+            f"{get_voice_pair(language)['EXPERT']['name']} (EXPERT); WebSocket contexts enabled.",
             file=sys.stderr,
         )
     else:
@@ -412,6 +413,12 @@ def main() -> None:
     parser.add_argument("input", help="Path to the input PDF or text document")
     parser.add_argument("--output-dir", default="data/output", help="Directory for generated output artifacts")
     parser.add_argument(
+        "--language",
+        choices=["en", "nl"],
+        default="en",
+        help="Spoken podcast language. Cartesia uses only a voice pair configured for this language.",
+    )
+    parser.add_argument(
         "--llm",
         choices=["auto", "openai", "qwen"],
         default="auto",
@@ -465,6 +472,7 @@ def main() -> None:
             llm=llm,
             max_chunks=args.max_chunks,
             tts_backend=tts_backend,
+            language=args.language,
             target_minutes=args.target_minutes,
             research=not args.skip_research,
         )

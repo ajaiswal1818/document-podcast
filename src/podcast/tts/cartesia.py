@@ -16,9 +16,30 @@ CARTESIA_MODEL_ID = "sonic-3.6"
 SAMPLE_RATE = 44100
 MAX_CONTINUATION_CHARS = 600
 
-# Cartesia's recommended stable English voices for production use.
-HOST_VOICE = "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4"  # Skylar (en-US)
-EXPERT_VOICE = "47c38ca4-5f35-497b-b1a3-415245fb35e1"  # Daniel (en-US)
+# Each pair contains voices explicitly catalogued by Cartesia for the language.
+VOICE_PAIRS = {
+    "en": {
+        "HOST": {"id": "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4", "name": "Skylar"},
+        "EXPERT": {"id": "47c38ca4-5f35-497b-b1a3-415245fb35e1", "name": "Daniel"},
+    },
+    "nl": {
+        "HOST": {"id": "96355f3d-0179-4c9a-a8d8-11ef0779a9b8", "name": "Noa"},
+        "EXPERT": {"id": "da743a82-ddf2-4d9b-8eb8-ff67ca0b138e", "name": "Stijn"},
+    },
+}
+
+LANGUAGE_NAMES = {"en": "English", "nl": "Dutch"}
+HOST_VOICE = VOICE_PAIRS["en"]["HOST"]["id"]
+EXPERT_VOICE = VOICE_PAIRS["en"]["EXPERT"]["id"]
+
+
+def get_voice_pair(language: str) -> dict[str, dict[str, str]]:
+    """Return the language-matched HOST/EXPERT voices or fail before synthesis."""
+    code = (language or "en").lower()
+    if code not in VOICE_PAIRS:
+        supported = ", ".join(sorted(VOICE_PAIRS))
+        raise ValueError(f"Cartesia voice pair is not configured for '{code}'. Supported languages: {supported}.")
+    return VOICE_PAIRS[code]
 
 
 def _load_project_env() -> None:
@@ -46,14 +67,16 @@ class CartesiaTTS(TTSBackend):
 
     def __init__(
         self,
-        voice: str = HOST_VOICE,
+        voice: str | None = None,
         *,
         api_key: str | None = None,
         model_id: str = CARTESIA_MODEL_ID,
+        language: str = "en",
     ) -> None:
         _load_project_env()
         self.api_key = api_key or os.getenv("CARTESIA_API_KEY")
-        self.voice = voice
+        self.language = (language or "en").lower()
+        self.voice = voice or get_voice_pair(self.language)["HOST"]["id"]
         self.model_id = model_id
 
     def synthesize(self, text: str, output_path: str, voice: str | None = None) -> str:
@@ -76,7 +99,7 @@ class CartesiaTTS(TTSBackend):
                     model_id=self.model_id,
                     voice=voice or self.voice,
                     output_format={"container": "raw", "encoding": "pcm_s16le", "sample_rate": SAMPLE_RATE},
-                    language="en",
+                    language=self.language,
                 )
                 for chunk in chunks:
                     context.push(chunk)
@@ -100,7 +123,7 @@ class CartesiaTTS(TTSBackend):
         if not audio_bytes:
             raise RuntimeError("Cartesia synthesis returned no audio.")
         print(
-            f"TTS: Cartesia completed model={self.model_id} voice_id={voice or self.voice} "
+            f"TTS: Cartesia completed model={self.model_id} language={self.language} voice_id={voice or self.voice} "
             f"context_chunks={len(chunks)} pcm_bytes={audio_bytes}",
             file=sys.stderr,
         )

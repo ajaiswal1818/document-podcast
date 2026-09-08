@@ -7,6 +7,11 @@ import re
 from typing import Any
 
 
+PODCAST_WRITER_SYSTEM_PROMPT = """You are an elite narrative podcast writer.
+
+Create an engaging, natural-sounding two-person conversation, not a lecture disguised as dialogue. The HOST and EXPERT have distinct voices and actively listen to one another: each turn should react, clarify, challenge, or advance the story. Vary rhythm and turn length, let discoveries unfold at meaningful moments, and avoid generic recaps or repetitive question-and-answer patterns. Ground every claim in the supplied material. Return only the requested JSON."""
+
+
 class PodcastDialogue:
     """Generate a structured dialogue JSON object from a plan using the local LLM."""
 
@@ -68,6 +73,7 @@ class PodcastDialogue:
         story_blueprint: dict[str, Any] = {}
         if isinstance(plan, dict):
             title = str(plan.get("title", title))
+            language = str(plan.get("language", "en")).lower()
             material = plan.get("material", {})
             story_blueprint = plan.get("story", {}) or {}
             audience = plan.get("audience", {}) or {}
@@ -75,6 +81,8 @@ class PodcastDialogue:
         else:
             audience = {}
             teaching = []
+            language = "en"
+        language_name = {"en": "English", "nl": "Dutch"}.get(language, language)
 
         prompt = f"""
 You are producing a podcast story for a healthcare / biotech marketing field audience.
@@ -109,6 +117,7 @@ Requirements:
 - If the source is complex or technical, explain it in simple analogies without losing meaning.
 - Do not invent data, product claims, or unsupported conclusions.
 - Make the numbers meaningful by explaining why they matter, not just stating them.
+- Write every spoken dialogue line in {language_name}; JSON field names and speaker labels remain in English.
 - Output valid JSON in this exact shape:
 
 {{
@@ -126,14 +135,14 @@ Requirements:
 
         if hasattr(self.llm, "generate_json"):
             script = self.llm.generate_json(
-                "You are a careful podcast script writer.",
+                PODCAST_WRITER_SYSTEM_PROMPT,
                 prompt,
                 max_tokens=10000,
                 retries=2,
             )
         else:
             response = self.llm.generate(
-                "You are a careful podcast script writer.",
+                PODCAST_WRITER_SYSTEM_PROMPT,
                 prompt,
                 max_tokens=10000,
             )

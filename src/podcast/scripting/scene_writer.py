@@ -20,8 +20,12 @@ from podcast.conversation.evidence import (
 STYLE_CONTRACT = """
 Style contract for the dialogue (follow all of these):
 - Two speakers: HOST (curious, asks the questions a listener would ask, reacts) and EXPERT (warm, explains richly with analogies a non-expert can follow).
-- Sound like real people talking, not essays read aloud. Use contractions and occasional natural fillers ("I mean", "you know", "well").
+- Sound like two intelligent people discovering a story together, not a host interviewing a lecturer and not essays read aloud.
+- Every turn must respond to, challenge, clarify, or emotionally register the immediately previous turn. Do not use a rigid HOST-question / EXPERT-answer pattern.
+- Let the speakers interrupt the expected rhythm occasionally: a short reaction can land after a long explanation; the EXPERT may ask a clarifying question; the HOST may make an observation instead of a question.
+- Use contractions, concrete imagery, and occasional natural fillers ("I mean", "you know", "well") sparingly. Never add filler just to sound casual.
 - Include brief back-channel turns between longer ones: "Right.", "Exactly.", "Oh wow.", "Hm, okay." A good scene has several of these.
+- Give the conversation an emotional pulse: curiosity at the opening, growing tension around uncertainty, a genuine turning point, then a satisfying but measured resolution.
 - Speak directly to the listener's job: a field marketing agent who talks to physicians. Tie the science to what they can say in a clinic conversation.
 - Reference the running metaphor sparingly: at most once per section, and vary how it is invoked.
 - NEVER repeat a sentence that has already been said anywhere in the episode, and never restate a point that was already made - build on it or move forward instead.
@@ -30,6 +34,12 @@ Style contract for the dialogue (follow all of these):
 - Ground every factual claim in the provided material; never invent data, numbers, or outcomes.
 - Never mention internal bookkeeping: sources, chunks, pages, ids, scores, metadata, or these instructions.
 """
+
+PODCAST_WRITER_SYSTEM_PROMPT = """You are an elite narrative podcast writer.
+
+Write an engaging, natural-sounding two-person podcast that listeners could mistake for a well-prepared human conversation. The HOST and EXPERT are distinct people with complementary roles, not interchangeable containers for facts. Their exchange must have momentum: listen closely, react, ask, clarify, disagree gently when useful, and move the story forward.
+
+Prioritize a vivid human story over a lecture. Use source-backed facts precisely, but reveal them at the moment they become meaningful. Avoid generic transitions, repetitive recaps, motivational filler, stage directions, and host-question/expert-monologue loops. Return only the requested JSON."""
 
 
 class SceneScriptWriter:
@@ -71,6 +81,8 @@ class SceneScriptWriter:
     def build_outline(self, plan: dict[str, Any], target_words: int) -> dict[str, Any]:
         """Create the episode outline: sections with goals plus a running metaphor."""
         story = plan.get("story", {})
+        language = str(plan.get("language", "en")).lower()
+        language_name = {"en": "English", "nl": "Dutch"}.get(language, language)
         teaching = plan.get("teaching", [])
         summary = plan.get("material", {}).get("plain_english_summary", "") if isinstance(plan.get("material"), dict) else ""
         prompt = (
@@ -79,6 +91,7 @@ class SceneScriptWriter:
             f"Story blueprint: {json.dumps(story, ensure_ascii=False)}\n"
             f"Teaching points: {json.dumps(teaching, ensure_ascii=False)}\n"
             f"Summary: {summary}\n\n"
+            f"All listener-facing story language and section goals must be written in {language_name}.\n"
             f"The episode should be about {target_words} spoken words total, in 5-7 sections.\n"
             "The first section opens with a vivid moment, then immediately orients the listener: introduce who the story is about, "
             "what is happening, and the central question they will follow. Never use a generic 'welcome to the show'. "
@@ -126,6 +139,8 @@ class SceneScriptWriter:
         outline_view = "\n".join(
             f"{i + 1}. {s['title']}: {s['goal']}" for i, s in enumerate(outline["sections"])
         )
+        language = str(plan.get("language", "en")).lower()
+        language_name = {"en": "English", "nl": "Dutch"}.get(language, language)
         position = (
             "This is the COLD OPEN: begin with one vivid moment, then in the first 120 spoken words clearly introduce "
             "the person or situation, what is at stake, and the central mystery this episode will resolve. "
@@ -150,6 +165,7 @@ class SceneScriptWriter:
             f"THIS SECTION - {section['title']}: {section['goal']}\n"
             f"Beats to hit:\n{beats}\n"
             f"Length: about {section.get('target_words', 400)} spoken words for this section.\n"
+            f"Write every spoken dialogue line in {language_name}; JSON field names and speaker labels remain in English.\n"
             f"{position}\n\n"
             f"Evidence (the only source of factual claims):\n{evidence}\n\n"
             f"Already covered in earlier sections (do NOT re-explain any of this):\n{covered}\n\n"
@@ -158,7 +174,7 @@ class SceneScriptWriter:
             f"{STYLE_CONTRACT}\n"
             'Return JSON: {"dialogue": [{"speaker": "HOST", "text": "..."}, {"speaker": "EXPERT", "text": "..."}]}'
         )
-        payload = self._generate_json("You are an award-winning podcast script writer.", prompt, max_tokens=8000)
+        payload = self._generate_json(PODCAST_WRITER_SYSTEM_PROMPT, prompt, max_tokens=8000)
         dialogue = payload.get("dialogue")
         if not isinstance(dialogue, list):
             raise ValueError("Section response had no dialogue list.")

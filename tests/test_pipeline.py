@@ -362,6 +362,7 @@ def test_conversational_agent_prompts_for_reaction_before_explaining() -> None:
 
     assert "React to what the other person just said" in llm.captured["system"]
     assert "Do NOT always explain" in llm.captured["system"]
+    assert "not a lecturer or a scripted interviewer" in llm.captured["system"]
 
 
 def test_conversation_state_allows_longer_podcast_blocks() -> None:
@@ -730,10 +731,15 @@ def test_run_pipeline_regenerates_when_story_editor_rejects(tmp_path: Path, monk
 
 def test_tts_backend_factory_uses_selected_backend() -> None:
     from podcast.tts import get_tts_backend
+    from podcast.tts.cartesia import get_voice_pair
 
     assert get_tts_backend("cartesia").__class__.__name__ == "CartesiaTTS"
     assert get_tts_backend("kokoro").__class__.__name__ == "KokoroTTS"
     assert get_tts_backend("vibevoice").__class__.__name__ == "VibeVoiceTTS"
+    assert get_voice_pair("nl") == {
+        "HOST": {"id": "96355f3d-0179-4c9a-a8d8-11ef0779a9b8", "name": "Noa"},
+        "EXPERT": {"id": "da743a82-ddf2-4d9b-8eb8-ff67ca0b138e", "name": "Stijn"},
+    }
 
 
 def test_cartesia_uses_one_fixed_voice_per_podcast_role(tmp_path: Path, monkeypatch) -> None:
@@ -813,18 +819,20 @@ def test_pipeline_writes_cartesia_tts_manifest(tmp_path: Path, monkeypatch) -> N
             sf.write(output_path, [0.0, 0.1, 0.2], 8000)
             return output_path
 
-    monkeypatch.setattr("podcast.cli.CartesiaTTS", lambda: FakeTTS())
+    monkeypatch.setattr("podcast.cli.CartesiaTTS", lambda **_kwargs: FakeTTS())
     monkeypatch.setattr("podcast.cli.assemble_audio_files", lambda files, out, **kwargs: str(Path(out).write_bytes(b"x") or Path(out)))
 
     run_pipeline(
         str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1,
-        research=False, tts_backend="cartesia",
+        research=False, tts_backend="cartesia", language="nl",
     )
 
     manifest = json.loads((tmp_path / "output" / "notes" / "tts_manifest.json").read_text(encoding="utf-8"))
     assert manifest["provider"] == "Cartesia"
     assert manifest["model"] == "sonic-3.6"
-    assert manifest["voice_roles"]["HOST"]["name"] == "Skylar"
+    assert manifest["language"] == "nl"
+    assert manifest["voice_roles"]["HOST"]["name"] == "Noa"
+    assert manifest["voice_roles"]["EXPERT"]["name"] == "Stijn"
     assert manifest["contexts"]["enabled"] is True
 
 

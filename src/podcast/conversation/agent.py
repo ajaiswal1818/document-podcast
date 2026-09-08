@@ -119,6 +119,8 @@ class ConversationalAgent:
 
         context = state.render_for_agent(self.name)
         evidence = render_evidence_for_agent(material if isinstance(material, dict) else None)
+        language = str((material or {}).get("language", "en")).lower() if isinstance(material, dict) else "en"
+        language_name = {"en": "English", "nl": "Dutch"}.get(language, language)
         recent_turns = context.get("recent_turns", [])
         transcript = "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in recent_turns)
         if not transcript:
@@ -129,10 +131,14 @@ class ConversationalAgent:
             f"Your persona: {self.persona}. "
             "React to what the other person just said before deciding what to say. "
             "Do NOT always explain. Sometimes react briefly, ask a short question, or push on a surprising point. "
+            "You are not a lecturer or a scripted interviewer: sound like a thoughtful human who is listening in real time. "
+            "Make each turn do one clear conversational job—react, clarify, challenge, connect, or move the story forward. "
+            "Avoid a rigid question-and-answer pattern, generic transitions, and recap language. "
             "Vary your length naturally: a brief reaction, a short question, a normal reply, or occasionally a deeper explanation. "
             "Ground every factual claim in the evidence provided; never invent data. "
             "Never mention internal bookkeeping such as sources, chunks, pages, ids, scores, or metadata. "
             "Do not repeat points that have already been made; move the conversation forward. "
+            f"Speak only in {language_name}. "
             f"Reply with ONLY the words {self.name} speaks next - no JSON, no quotes, no speaker label, no stage directions."
         )
         focus = str(context.get("current_focus") or "").strip()
