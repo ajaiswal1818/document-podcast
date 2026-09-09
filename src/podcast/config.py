@@ -10,11 +10,12 @@ from pathlib import Path
 class AppConfig:
     """Base configuration for document-podcast."""
 
-    project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parents[3])
-    data_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[3] / "data")
-    input_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[3] / "data" / "input")
-    output_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[3] / "data" / "output")
-    models_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[3] / "models")
+    # config.py lives in <project>/src/podcast; two parents up is the repository.
+    project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2])
+    data_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2] / "data")
+    input_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2] / "data" / "input")
+    output_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2] / "data" / "output")
+    models_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2] / "models")
 
     def ensure_directories(self) -> None:
         """Create the required directories if they do not exist."""

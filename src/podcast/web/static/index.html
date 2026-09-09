@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b1119">
+    <title>Novo Radio</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <main class="radio-shell">
+      <header class="masthead">
+        <p class="eyebrow">Document podcast studio</p>
+        <h1>Novo <em>Radio</em></h1>
+        <p class="tagline">Turn a source into a two-voice conversation.</p>
+      </header>
+
+      <section class="station" aria-label="Station controls">
+        <span>Station</span>
+        <div class="station-bar"><button id="previousEpisode" aria-label="Previous episode">‹</button><strong>MAPA</strong><button id="nextEpisode" aria-label="Next episode">›</button></div>
+      </section>
+
+      <section class="library" aria-labelledby="library-title">
+        <div class="section-heading"><h2 id="library-title">Your podcasts</h2><button class="text-button" id="refresh">Refresh</button></div>
+        <label class="search"><span class="visually-hidden">Search podcasts</span><input id="search" type="search" placeholder="Search podcasts"><span aria-hidden="true">⌕</span></label>
+        <div id="episodeList" class="episode-list" aria-live="polite"><p class="empty">Loading your local episodes…</p></div>
+      </section>
+
+      <section class="create" aria-labelledby="create-title">
+        <div class="section-heading"><h2 id="create-title">Create an episode</h2><span id="jobStatus" class="status">Ready</span></div>
+        <form id="generateForm">
+          <label class="file-input"> <span id="fileLabel">Choose a PDF or text file</span><input id="sourceFile" type="file" accept=".pdf,.txt,application/pdf,text/plain" required></label>
+          <div class="option-row">
+            <label>Language<select id="language"><option value="en">English</option><option value="nl">Nederlands</option></select></label>
+            <label>Length<select id="minutes"><option value="8">8 min</option><option value="12">12 min</option><option value="15" selected>15 min max</option></select></label>
+          </div>
+          <div class="option-row">
+            <label>Writing<select id="llm"><option value="auto">Auto</option><option value="openai">ChatGPT</option><option value="qwen">Local Qwen</option></select></label>
+            <label>Voices<select id="tts"><option value="auto">Auto</option><option value="cartesia">Cartesia</option><option value="kokoro">Local Kokoro</option></select></label>
+          </div>
+          <label class="check"><input id="research" type="checkbox" checked> Verify relevant scholarly context</label>
+          <button class="generate" id="generate" type="submit">Make podcast</button>
+        </form>
+      </section>
+
+      <section class="player" aria-label="Audio player">
+        <div class="player-top"><div><p class="eyebrow">Now playing</p><h2 id="nowTitle">Choose a podcast</h2></div><span id="nowLanguage" class="language-pill">—</span></div>
+        <p id="summary" class="summary">Choose an episode to listen and read its concise source summary.</p>
+        <audio id="audio" preload="metadata"></audio>
+        <input id="progress" aria-label="Playback progress" type="range" min="0" max="100" value="0" disabled>
+        <div class="time-row"><time id="elapsed">0:00</time><time id="duration">0:00</time></div>
+        <div class="playback-controls"><button id="back15" aria-label="Back 15 seconds">↶15</button><button id="play" class="play" aria-label="Play">▶</button><button id="forward15" aria-label="Forward 15 seconds">15↷</button></div>
+      </section>
+    </main>
+    <template id="episodeTemplate"><button class="episode"><span class="episode-title"></span><span class="episode-meta"></span></button></template>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

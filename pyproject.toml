@@ -20,6 +20,9 @@ dependencies = [
     "cartesia[websockets]>=4.0.1",
     "openai>=1.0",
     "pytest>=8.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +30,7 @@ dia = ["mlx-audio", "librosa"]
 
 [project.scripts]
 document-podcast = "podcast.cli:main"
+document-podcast-web = "podcast.web.app:main"
 
 [tool.uv]
 package = true
