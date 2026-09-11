@@ -7,7 +7,7 @@
     <title>Novo Radio</title>
     <link rel="icon" type="image/png" href="/assets/novo-radio-logo-transparent.png">
     <link rel="apple-touch-icon" href="/assets/novo-radio-logo-transparent.png">
-    <link rel="stylesheet" href="/app.css?v=2">
+    <link rel="stylesheet" href="/app.css?v=4">
   </head>
   <body>
     <main class="radio-shell">
@@ -52,8 +52,8 @@
         </form>
       </section>
 
-      <section class="player" aria-label="Audio player">
-        <div class="player-top"><div><p class="eyebrow">Now playing</p><h2 id="nowTitle">Choose a podcast</h2></div><span id="nowLanguage" class="language-pill">—</span></div>
+      <section id="playerPanel" class="player" aria-label="Audio player">
+        <div class="player-top"><div><p class="eyebrow">Now playing</p><h2 id="nowTitle">Choose a podcast</h2></div><div class="player-actions"><span id="nowLanguage" class="language-pill">—</span><button id="playerToggle" class="player-toggle" type="button" aria-expanded="true" aria-controls="summary" aria-label="Collapse description">⌃</button></div></div>
         <p id="summary" class="summary">Choose an episode to listen and read its concise source summary.</p>
         <audio id="audio" preload="metadata"></audio>
         <input id="progress" aria-label="Playback progress" type="range" min="0" max="100" value="0" disabled>
@@ -62,6 +62,6 @@
       </section>
     </main>
     <template id="episodeTemplate"><button class="episode"><span class="episode-title"></span><span class="episode-meta"></span></button></template>
-    <script src="/app.js" defer></script>
+    <script src="/app.js?v=3" defer></script>
   </body>
 </html>

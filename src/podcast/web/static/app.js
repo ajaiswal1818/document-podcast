@@ -1,6 +1,7 @@
 const state = { episodes: [], selected: -1, jobId: null };
 const $ = (id) => document.getElementById(id);
 const audio = $("audio");
+const playerPanel = $("playerPanel");
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -43,6 +44,14 @@ function selectEpisode(index) {
   renderEpisodes();
 }
 function moveEpisode(offset) { if (state.selected >= 0) selectEpisode((state.selected + offset + state.episodes.length) % state.episodes.length); }
+$("playerToggle").addEventListener("click", () => {
+  const collapsed = !playerPanel.classList.contains("collapsed");
+  playerPanel.classList.toggle("collapsed", collapsed);
+  $("summary").hidden = collapsed;
+  $("playerToggle").textContent = collapsed ? "⌄" : "⌃";
+  $("playerToggle").setAttribute("aria-expanded", String(!collapsed));
+  $("playerToggle").setAttribute("aria-label", collapsed ? "Expand description" : "Collapse description");
+});
 $("play").addEventListener("click", async () => { if (!audio.src) return; if (audio.paused) await audio.play(); else audio.pause(); });
 audio.addEventListener("play", () => { $("play").textContent = "Ⅱ"; $("play").setAttribute("aria-label", "Pause"); });
 audio.addEventListener("pause", () => { $("play").textContent = "▶"; $("play").setAttribute("aria-label", "Play"); });

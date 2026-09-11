@@ -74,3 +74,12 @@ def test_web_page_offers_three_minute_technical_briefing(tmp_path: Path) -> None
 
     assert 'value="technical"' in page.text
     assert "Technical medical briefing" in page.text
+
+
+def test_web_page_has_collapsible_audio_player(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.ensure_directories()
+    page = TestClient(create_app(config)).get("/")
+
+    assert 'id="playerToggle"' in page.text
+    assert 'aria-controls="summary"' in page.text
