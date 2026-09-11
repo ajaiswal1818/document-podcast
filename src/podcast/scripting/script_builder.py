@@ -78,18 +78,26 @@ class PodcastDialogue:
             story_blueprint = plan.get("story", {}) or {}
             audience = plan.get("audience", {}) or {}
             teaching = plan.get("teaching", []) or []
+            technical = plan.get("format") == "technical"
         else:
             audience = {}
             teaching = []
             language = "en"
+            technical = False
         language_name = {"en": "English", "da": "Danish"}.get(language, language)
+        audience = "a clinical or medical audience" if technical else "a non-biologist field agent"
+        terminology_rules = (
+            "- Preserve medical terminology from the source. Do not simplify, define, or replace clinical terms with plain-English analogies.\n"
+            if technical
+            else "- Translate technical biology and medical terms into plain English for a lay audience.\n"
+        )
 
         prompt = f"""
-You are producing a podcast story for a healthcare / biotech marketing field audience.
+You are producing a podcast story for {audience}.
 
 Title: {title}
 
-Audience: a non-biologist field agent who needs to understand the science quickly and confidently.
+Audience: {audience}.
 Goal: tell the most compelling story that can honestly be drawn from this material, not a generic summary.
 
 Story Blueprint:
@@ -110,11 +118,10 @@ Requirements:
 - Every factual claim must be supported by the supplied material.
 - The script must follow the story blueprint, especially the central question, tension, turning point, and takeaway.
 - The HOST should ask the kinds of questions a real listener would ask before the science makes sense.
-- The EXPERT should explain complex ideas simply and clearly, without talking like a textbook.
-- Translate technical biology and medical terms into plain English for a lay audience.
+- The EXPERT should be precise, evidence-led, and natural rather than reading a textbook.
+{terminology_rules}- Do not introduce medical terminology that is not supported by the supplied material.
 - Keep it conversational and human, with a natural rhythm: HOST question, brief expert answer, then a follow-up question.
 - Use a structure that matches the blueprint instead of generic sections.
-- If the source is complex or technical, explain it in simple analogies without losing meaning.
 - Do not invent data, product claims, or unsupported conclusions.
 - Make the numbers meaningful by explaining why they matter, not just stating them.
 - Write every spoken dialogue line in {language_name}; JSON field names and speaker labels remain in English.

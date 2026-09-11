@@ -35,6 +35,17 @@ Style contract for the dialogue (follow all of these):
 - Never mention internal bookkeeping: sources, chunks, pages, ids, scores, metadata, or these instructions.
 """
 
+TECHNICAL_STYLE_CONTRACT = """
+Style contract for the dialogue (follow all of these):
+- Two speakers: HOST and EXPERT. Keep the exchange focused, collegial, and clinically precise.
+- Write for a medical or scientifically trained listener, not a lay audience.
+- Preserve source terminology, including disease names, biomarkers, endpoints, pathways, interventions, and statistical language.
+- Do NOT translate, define, soften, or replace medical terms with plain-English explanations or analogies.
+- Ground every factual claim in the provided material; never invent data, numbers, or outcomes.
+- Keep the two-person rhythm natural and concise. Do not turn the episode into a lecture or an interview transcript.
+- Never mention internal bookkeeping: sources, chunks, pages, ids, scores, metadata, or these instructions.
+"""
+
 PODCAST_WRITER_SYSTEM_PROMPT = """You are an elite narrative podcast writer.
 
 Write an engaging, natural-sounding two-person podcast that listeners could mistake for a well-prepared human conversation. The HOST and EXPERT are distinct people with complementary roles, not interchangeable containers for facts. Their exchange must have momentum: listen closely, react, ask, clarify, disagree gently when useful, and move the story forward.
@@ -47,6 +58,10 @@ class SceneScriptWriter:
 
     def __init__(self, llm: Any) -> None:
         self.llm = llm
+
+    @staticmethod
+    def _is_technical(plan: dict[str, Any]) -> bool:
+        return plan.get("format") == "technical"
 
     def _generate_json(self, system: str, user: str, max_tokens: int = 8000) -> dict[str, Any]:
         if hasattr(self.llm, "generate_json"):
@@ -69,7 +84,9 @@ class SceneScriptWriter:
             ("Why it matters in the field", story.get("big_takeaway") or "Connect the finding to real conversations with physicians."),
             ("Landing it", story.get("resolution") or "Pay off the metaphor, land the takeaway, close naturally."),
         ]
-        per_section = max(150, target_words // len(titles))
+        if self._is_technical(plan):
+            titles = titles[:3]
+        per_section = max(70 if self._is_technical(plan) else 150, target_words // len(titles))
         return {
             "running_metaphor": "a locked-room mystery where the culprit is hiding in plain sight",
             "sections": [
@@ -83,16 +100,24 @@ class SceneScriptWriter:
         story = plan.get("story", {})
         language = str(plan.get("language", "en")).lower()
         language_name = {"en": "English", "da": "Danish"}.get(language, language)
+        technical = self._is_technical(plan)
+        audience = "a clinical or medically trained listener" if technical else "a field marketing audience"
+        terminology_instruction = (
+            "Preserve medical terminology from the source; do not add plain-language definitions or analogies."
+            if technical
+            else "Translate complex terms into accessible language and use analogies where helpful."
+        )
         teaching = plan.get("teaching", [])
         summary = plan.get("material", {}).get("plain_english_summary", "") if isinstance(plan.get("material"), dict) else ""
         prompt = (
-            "Design the outline for a narrative podcast episode for a field marketing audience.\n\n"
+            f"Design the outline for a narrative podcast episode for {audience}.\n\n"
             f"Title: {plan.get('title', 'Untitled')}\n"
             f"Story blueprint: {json.dumps(story, ensure_ascii=False)}\n"
             f"Teaching points: {json.dumps(teaching, ensure_ascii=False)}\n"
             f"Summary: {summary}\n\n"
             f"All listener-facing story language and section goals must be written in {language_name}.\n"
-            f"The episode should be about {target_words} spoken words total, in 5-7 sections.\n"
+            f"{terminology_instruction}\n"
+            f"The episode should be about {target_words} spoken words total, in {'3-4' if technical else '5-7'} sections.\n"
             "The first section opens with a vivid moment, then immediately orients the listener: introduce who the story is about, "
             "what is happening, and the central question they will follow. Never use a generic 'welcome to the show'. "
             "The last section lands the big takeaway and closes naturally.\n"
@@ -113,7 +138,10 @@ class SceneScriptWriter:
                             "title": str(section["title"]).strip(),
                             "goal": str(section.get("goal", "")).strip(),
                             "beats": [str(beat) for beat in section.get("beats", []) if str(beat).strip()],
-                            "target_words": int(section.get("target_words") or max(150, target_words // len(sections))),
+                            "target_words": int(
+                                section.get("target_words")
+                                or max(70 if technical else 150, target_words // len(sections))
+                            ),
                         }
                     )
             if not cleaned_sections:
@@ -141,6 +169,13 @@ class SceneScriptWriter:
         )
         language = str(plan.get("language", "en")).lower()
         language_name = {"en": "English", "da": "Danish"}.get(language, language)
+        technical = self._is_technical(plan)
+        style_contract = TECHNICAL_STYLE_CONTRACT if technical else STYLE_CONTRACT
+        terminology_instruction = (
+            "Use the source's medical terminology exactly where applicable. Do not explain terms for a lay listener or use analogies."
+            if technical
+            else "Translate technical terms into plain language the first time they appear, using an analogy where helpful."
+        )
         position = (
             "This is the COLD OPEN: begin with one vivid moment, then in the first 120 spoken words clearly introduce "
             "the person or situation, what is at stake, and the central mystery this episode will resolve. "
@@ -166,12 +201,13 @@ class SceneScriptWriter:
             f"Beats to hit:\n{beats}\n"
             f"Length: about {section.get('target_words', 400)} spoken words for this section.\n"
             f"Write every spoken dialogue line in {language_name}; JSON field names and speaker labels remain in English.\n"
+            f"{terminology_instruction}\n"
             f"{position}\n\n"
             f"Evidence (the only source of factual claims):\n{evidence}\n\n"
             f"Already covered in earlier sections (do NOT re-explain any of this):\n{covered}\n\n"
             f"Previously spoken dialogue (do not paraphrase or recap any claim here):\n{spoken_ledger}\n\n"
             f"Last lines of the previous section:\n{tail}\n"
-            f"{STYLE_CONTRACT}\n"
+            f"{style_contract}\n"
             'Return JSON: {"dialogue": [{"speaker": "HOST", "text": "..."}, {"speaker": "EXPERT", "text": "..."}]}'
         )
         payload = self._generate_json(PODCAST_WRITER_SYSTEM_PROMPT, prompt, max_tokens=8000)

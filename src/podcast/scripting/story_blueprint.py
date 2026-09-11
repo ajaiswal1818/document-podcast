@@ -6,7 +6,9 @@ import json
 from typing import Any
 
 
-def build_story_blueprint(llm: Any, analyses: list[dict], title: str = "Local Podcast Episode") -> dict[str, Any]:
+def build_story_blueprint(
+    llm: Any, analyses: list[dict], title: str = "Local Podcast Episode", *, technical: bool = False
+) -> dict[str, Any]:
     """Create a story-first blueprint that explains the central question, audience needs, and teaching points."""
     if llm is None or not getattr(llm, "available", False):
         raise RuntimeError("Qwen model unavailable.")
@@ -25,8 +27,14 @@ def build_story_blueprint(llm: Any, analyses: list[dict], title: str = "Local Po
             if isinstance(items, list):
                 aggregated[key].extend(str(item) for item in items)
 
+    audience = "a clinical or medical audience" if technical else "a non-biologist sales or field audience"
+    terminology = (
+        "Preserve medical terminology from the source. Do not add lay explanations or analogies."
+        if technical
+        else "Explain scientific ideas simply for someone with no biology background."
+    )
     prompt = f"""
-You are helping turn source material into a memorable learning story for a non-biologist sales or field audience.
+You are helping turn source material into a memorable learning story for {audience}.
 
 Title: {title}
 
@@ -65,10 +73,10 @@ Return valid JSON with this exact structure:
 
 Rules:
 - Do not invent facts.
-- Write for someone with no biology background.
+- {terminology}
 - Make the story feel like a real narrative, not a report summary.
 - Identify the key concepts they need to understand before the story makes sense.
-- The teaching items should help a sales or field person understand the science simply.
+- The teaching items should preserve the source's clinical framing.
 """
     system = "You are a story architect for scientific content."
     if hasattr(llm, "generate_json"):

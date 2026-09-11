@@ -54,6 +54,7 @@ $("forward15").addEventListener("click", () => { audio.currentTime = Math.min(au
 $("previousEpisode").addEventListener("click", () => moveEpisode(-1)); $("nextEpisode").addEventListener("click", () => moveEpisode(1));
 $("search").addEventListener("input", renderEpisodes); $("refresh").addEventListener("click", () => loadEpisodes().catch((err) => setStatus(err.message, "failed")));
 $("sourceFile").addEventListener("change", (event) => { $("fileLabel").textContent = event.target.files[0]?.name || "Choose a PDF or text file"; });
+$("episodeFormat").addEventListener("change", (event) => { const technical = event.target.value === "technical"; $("minutes").value = technical ? "3" : "15"; $("minutes").disabled = technical; });
 async function pollJob() {
   if (!state.jobId) return;
   const response = await fetch(`/api/jobs/${state.jobId}`); const job = await response.json();
@@ -68,7 +69,7 @@ $("generateForm").addEventListener("submit", async (event) => {
     $("generate").disabled = true; setStatus("Uploading…", "queued");
     const form = new FormData(); form.append("file", file); const upload = await fetch("/api/uploads", { method: "POST", body: form });
     if (!upload.ok) throw new Error((await upload.json()).detail || "Upload failed."); const { filename } = await upload.json();
-    const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input_file: filename, language: $("language").value, llm: $("llm").value, tts: $("tts").value, target_minutes: Number($("minutes").value), research: $("research").checked }) });
+    const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input_file: filename, language: $("language").value, llm: $("llm").value, tts: $("tts").value, target_minutes: Number($("minutes").value), research: $("research").checked, episode_format: $("episodeFormat").value }) });
     if (!response.ok) throw new Error((await response.json()).detail || "Could not start generation."); state.jobId = (await response.json()).id; pollJob();
   } catch (err) { $("generate").disabled = false; setStatus(err.message, "failed"); }
 });

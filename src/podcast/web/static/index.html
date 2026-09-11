@@ -33,8 +33,9 @@
           <label class="file-input"> <span id="fileLabel">Choose a PDF or text file</span><input id="sourceFile" type="file" accept=".pdf,.txt,application/pdf,text/plain" required></label>
           <div class="option-row">
             <label>Language<select id="language"><option value="en">English</option><option value="da">Dansk</option></select></label>
-            <label>Length<select id="minutes"><option value="8">8 min</option><option value="12">12 min</option><option value="15" selected>15 min max</option></select></label>
+            <label>Length<select id="minutes"><option value="3">3 min</option><option value="8">8 min</option><option value="12">12 min</option><option value="15" selected>15 min max</option></select></label>
           </div>
+          <label>Version<select id="episodeFormat"><option value="plain">Plain-language podcast</option><option value="technical">Technical medical briefing — 3 min</option></select></label>
           <div class="option-row">
             <label>Writing<select id="llm"><option value="auto">Auto</option><option value="openai">ChatGPT</option><option value="qwen">Local Qwen</option></select></label>
             <label>Voices<select id="tts"><option value="auto">Auto</option><option value="cartesia">Cartesia</option><option value="kokoro">Local Kokoro</option></select></label>

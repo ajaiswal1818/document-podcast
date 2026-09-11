@@ -38,6 +38,7 @@ class GenerationRequest(BaseModel):
     tts: Literal["auto", "cartesia", "kokoro", "vibevoice", "dia"] = "auto"
     target_minutes: float = Field(default=15.0, gt=0, le=15.0)
     research: bool = True
+    episode_format: Literal["plain", "technical"] = "plain"
 
 
 def _now() -> str:
@@ -87,6 +88,7 @@ def _episode_payload(output_dir: Path, episode_dir: Path) -> dict[str, Any]:
         "title": str(title),
         "language": manifest.get("language") or plan.get("language") or "en",
         "tts_backend": manifest.get("backend"),
+        "episode_format": manifest.get("format") or plan.get("format") or "plain",
         "duration_seconds": duration,
         "created_at": datetime.fromtimestamp(audio_path.stat().st_mtime, UTC).isoformat(),
         "audio_url": f"/api/episodes/{episode_dir.name}/audio",
@@ -182,6 +184,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     language=request.language,
                     target_minutes=request.target_minutes,
                     research=request.research,
+                    episode_format=request.episode_format,
                 )
                 episode_id = source.stem
                 jobs[job_id].update({

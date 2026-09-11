@@ -201,8 +201,14 @@ def run_pipeline(
     language: str = "en",
     target_minutes: float = 15.0,
     research: bool = True,
+    episode_format: str = "plain",
 ) -> dict:
     """Run the local document-to-podcast pipeline on a single source file."""
+    if episode_format not in {"plain", "technical"}:
+        raise ValueError("episode_format must be 'plain' or 'technical'.")
+    technical = episode_format == "technical"
+    if technical:
+        target_minutes = 3.0
     source = Path(input_path)
     target_dir = Path(output_dir) / source.stem
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -246,14 +252,26 @@ def run_pipeline(
     analyses: list[dict] = []
     for chunk in (chunks[:max_chunks] + research_chunks[:max_chunks]):
         chunk_start = time.perf_counter()
-        analysis = analyse_chunk(llm, chunk)
+        analysis = analyse_chunk(llm, chunk, technical=technical)
         tokens = max(1, len(str(analysis).split()))
         _record_step(benchmark_steps, "analyse_chunk", start_time=chunk_start, tokens=tokens, chars=len(chunk))
         analyses.append(analysis)
 
-    plan = build_episode_plan(analyses, title=source.stem.replace("_", " ").title(), llm=llm)
-    story_blueprint = plan.get("story") or build_story_blueprint(llm, analyses, title=source.stem.replace("_", " ").title())
-    translated_material = translate_technical_terms(llm, plan.get("material", {}))
+    plan = build_episode_plan(
+        analyses, title=source.stem.replace("_", " ").title(), llm=llm, technical=technical
+    )
+    story_blueprint = plan.get("story") or build_story_blueprint(
+        llm, analyses, title=source.stem.replace("_", " ").title(), technical=technical
+    )
+    translated_material = (
+        {
+            "plain_english_summary": "",
+            "facts": [],
+            "main_ideas": [],
+        }
+        if technical
+        else translate_technical_terms(llm, plan.get("material", {}))
+    )
     plan["material"] = {
         **plan.get("material", {}),
         "plain_english_summary": translated_material.get("plain_english_summary", ""),
@@ -264,6 +282,7 @@ def run_pipeline(
     plan["audience"] = story_blueprint.get("audience", plan.get("audience", {}))
     plan["teaching"] = story_blueprint.get("teaching", plan.get("teaching", []))
     plan["language"] = language
+    plan["format"] = episode_format
     if research_report:
         plan["research"] = {
             "query": research_report.get("query", ""),
@@ -288,6 +307,7 @@ def run_pipeline(
         "story": story_blueprint.get("story", {}),
         "audience": story_blueprint.get("audience", {}),
         "teaching": story_blueprint.get("teaching", []),
+        "format": episode_format,
     }
     effective_minutes = min(target_minutes, MAX_EPISODE_MINUTES) if target_minutes else None
     if target_minutes and effective_minutes != target_minutes:
@@ -309,15 +329,15 @@ def run_pipeline(
         script = dialogue_builder.build(plan)
 
     script["dialogue"] = _cap_dialogue_words(dedupe_repeated_sentences(script.get("dialogue", [])), target_words)
-    verdict = editor.review(script, story_blueprint, target_words=target_words)
+    verdict = editor.review(script, story_blueprint, target_words=target_words, technical=technical)
     critical_checks = {"dialogue_is_diverse", "no_metadata_leakage"}
     for _attempt in range(2):
         if verdict["approved"]:
             break
-        regeneration_prompt = editor.build_regeneration_prompt(script, story_blueprint, verdict)
+        regeneration_prompt = editor.build_regeneration_prompt(script, story_blueprint, verdict, technical=technical)
         candidate = dialogue_builder.build(plan, regeneration_prompt=regeneration_prompt)
         candidate["dialogue"] = _cap_dialogue_words(dedupe_repeated_sentences(candidate.get("dialogue", [])), target_words)
-        candidate_verdict = editor.review(candidate, story_blueprint, target_words=target_words)
+        candidate_verdict = editor.review(candidate, story_blueprint, target_words=target_words, technical=technical)
         script_is_degenerate = critical_checks & set(verdict["failed_checks"])
         candidate_is_degenerate = critical_checks & set(candidate_verdict["failed_checks"])
         if (script_is_degenerate and not candidate_is_degenerate) or len(
@@ -346,6 +366,7 @@ def run_pipeline(
     tts_manifest: dict[str, Any] = {
         "backend": backend_name,
         "segments": 0,
+        "format": episode_format,
     }
     if backend_name == "cartesia":
         tts_manifest.update(
@@ -443,6 +464,11 @@ def main() -> None:
         help="Spoken podcast language. Cartesia uses only a voice pair configured for this language.",
     )
     parser.add_argument(
+        "--technical-brief",
+        action="store_true",
+        help="Create a fixed 3-minute clinical briefing that preserves source medical terminology.",
+    )
+    parser.add_argument(
         "--llm",
         choices=["auto", "openai", "qwen"],
         default="auto",
@@ -499,6 +525,7 @@ def main() -> None:
             language=args.language,
             target_minutes=args.target_minutes,
             research=not args.skip_research,
+            episode_format="technical" if args.technical_brief else "plain",
         )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -121,6 +121,12 @@ class ConversationalAgent:
         evidence = render_evidence_for_agent(material if isinstance(material, dict) else None)
         language = str((material or {}).get("language", "en")).lower() if isinstance(material, dict) else "en"
         language_name = {"en": "English", "da": "Danish"}.get(language, language)
+        technical = bool(isinstance(material, dict) and material.get("format") == "technical")
+        terminology_instruction = (
+            "Preserve the source's medical terminology. Do not translate, define, or simplify clinical terms. "
+            if technical
+            else "Explain technical terms in plain language before relying on them. "
+        )
         recent_turns = context.get("recent_turns", [])
         transcript = "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in recent_turns)
         if not transcript:
@@ -138,6 +144,7 @@ class ConversationalAgent:
             "Ground every factual claim in the evidence provided; never invent data. "
             "Never mention internal bookkeeping such as sources, chunks, pages, ids, scores, or metadata. "
             "Do not repeat points that have already been made; move the conversation forward. "
+            f"{terminology_instruction}"
             f"Speak only in {language_name}. "
             f"Reply with ONLY the words {self.name} speaks next - no JSON, no quotes, no speaker label, no stage directions."
         )

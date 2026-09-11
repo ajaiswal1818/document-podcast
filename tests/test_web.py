@@ -65,3 +65,12 @@ def test_web_serves_novo_logo_and_favicon_reference(tmp_path: Path) -> None:
     logo = client.get("/assets/novo-radio-logo.png")
     assert logo.status_code == 200
     assert logo.headers["content-type"] == "image/png"
+
+
+def test_web_page_offers_three_minute_technical_briefing(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.ensure_directories()
+    page = TestClient(create_app(config)).get("/")
+
+    assert 'value="technical"' in page.text
+    assert "Technical medical briefing" in page.text

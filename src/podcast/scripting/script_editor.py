@@ -27,6 +27,7 @@ class StoryEditor:
         blueprint: dict[str, Any] | None = None,
         *,
         target_words: int | None = None,
+        technical: bool = False,
     ) -> dict[str, Any]:
         """Evaluate whether the script follows a real story arc and explains the issue for a lay audience."""
         blueprint = blueprint or {}
@@ -106,7 +107,7 @@ class StoryEditor:
             "host_asks_questions": host_questions >= 1,
             "story_is_present": bool(story.get("central_question") or story.get("hook") or story.get("tension")),
             "story_has_arc": has_story_arc,
-            "technical_terms_are_explained": bool(blueprint.get("teaching") or blueprint.get("audience")),
+            "technical_terms_are_explained": technical or bool(blueprint.get("teaching") or blueprint.get("audience")),
             "takeaway_is_clear": takeaway_is_clear,
             "facts_are_present": bool(dialogue),
             "dialogue_is_diverse": dialogue_is_diverse,
@@ -131,7 +132,9 @@ class StoryEditor:
             ],
         }
 
-    def build_regeneration_prompt(self, script: dict[str, Any], blueprint: dict[str, Any] | None, verdict: dict[str, Any]) -> str:
+    def build_regeneration_prompt(
+        self, script: dict[str, Any], blueprint: dict[str, Any] | None, verdict: dict[str, Any], *, technical: bool = False
+    ) -> str:
         """Build a short list of repair instructions for a regenerate pass."""
         blueprint = blueprint or {}
         story = blueprint.get("story", {}) if isinstance(blueprint, dict) else {}
@@ -142,7 +145,7 @@ class StoryEditor:
             questions.append("Add at least one HOST question that a listener would genuinely ask before understanding the science.")
         if "story_is_present" in failed or "story_has_arc" in failed:
             questions.append("Make the story explicit: define the central question, the tension, and the turning point; the script should have a clear arc rather than a list of facts.")
-        if "technical_terms_are_explained" in failed:
+        if "technical_terms_are_explained" in failed and not technical:
             questions.append("Explain the technical concepts in plain English before using them in a way a non-biologist can follow.")
         if "takeaway_is_clear" in failed:
             questions.append("End with a clear takeaway that tells the audience why this matters and what they should remember.")

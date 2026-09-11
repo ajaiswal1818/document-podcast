@@ -235,6 +235,33 @@ def test_translate_technical_terms_to_plain_english() -> None:
     assert result["facts"][0]
 
 
+def test_technical_analysis_preserves_clinical_terminology() -> None:
+    from podcast.scripting.episode_planner import analyse_chunk
+
+    captured: dict[str, str] = {}
+
+    class TechnicalLLM:
+        def generate(self, system: str, user: str, max_tokens: int = 2048) -> str:
+            captured["system"] = system
+            captured["user"] = user
+            return '{"main_ideas": ["IL-6 inhibition"], "facts": [], "numbers": [], "arguments": [], "examples": [], "interesting_points": [], "conclusions": []}'
+
+    analysis = analyse_chunk(TechnicalLLM(), "IL-6 inhibition reduced CRP.", technical=True)
+
+    assert analysis["main_ideas"] == ["IL-6 inhibition"]
+    assert "Preserve medical and scientific terminology" in captured["user"]
+    assert "clinical audience" in captured["system"]
+
+
+def test_technical_editor_does_not_require_lay_explanations() -> None:
+    editor = StoryEditor(None)
+    script = {"speakers": ["HOST", "EXPERT"], "dialogue": [{"speaker": "HOST", "text": "What did the biomarker analysis show?"}, {"speaker": "EXPERT", "text": "IL-6 inhibition reduced CRP."}]}
+
+    verdict = editor.review(script, {}, technical=True)
+
+    assert verdict["checks"]["technical_terms_are_explained"] is True
+
+
 def test_story_blueprint_has_audience_and_teaching_layers() -> None:
     class FakeStoryLLM:
         available = True

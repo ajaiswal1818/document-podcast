@@ -66,21 +66,33 @@ class PodcastPlanner:
         return PodcastPlan(title=self.title, segments=chunks[:5])
 
 
-def analyse_chunk(llm, chunk: str) -> dict:
-    """Analyse a source chunk and return a JSON object with structured evidence."""
+def analyse_chunk(llm, chunk: str, *, technical: bool = False) -> dict:
+    """Analyse a source chunk and return source-grounded structured evidence."""
+    audience = "a clinical or medical audience" if technical else "a non-expert marketing field audience"
+    terminology_rule = (
+        "Preserve medical and scientific terminology exactly as it appears in the source whenever possible. "
+        "Do not substitute plain-English explanations or analogies for clinical terms."
+        if technical
+        else "Prefer plain-language explanations in the values. If a term is technical, explain it for a non-biologist."
+    )
+    system_prompt = (
+        "You are a medical evidence analyst for a clinical audience. Preserve the source terminology and extract only source-supported claims."
+        if technical
+        else SYSTEM_PROMPT
+    )
     prompt = f"""
-Analyse this document section for a non-expert marketing field audience.
+Analyse this document section for {audience}.
 
 SOURCE:
 
 {chunk}
 
-We need a story that helps a field agent explain the science in plain English.
+We need a source-faithful podcast brief.
 
 Please identify:
 - the core scientific insight
 - the business or practical significance
-- technical terms that should be translated to simple language
+- important medical and scientific terminology
 - evidence that is strong and source-backed
 - anything surprising or worth highlighting
 
@@ -97,13 +109,12 @@ Return JSON in this format:
 }}
 
 Important:
-- Prefer plain-language explanations in the values.
-- Keep the claims grounded in the source text.
-- If a term is technical, explain it in a way a non-biologist can understand.
+- {terminology_rule}
+- Keep claims grounded in the source text.
 """
 
     response = llm.generate(
-        SYSTEM_PROMPT,
+        system_prompt,
         prompt,
         max_tokens=10000,
     )
@@ -147,7 +158,9 @@ Rules:
     return translated
 
 
-def build_episode_plan(analyses: list[dict], title: str = "Local Podcast Episode", llm=None) -> dict:
+def build_episode_plan(
+    analyses: list[dict], title: str = "Local Podcast Episode", llm=None, *, technical: bool = False
+) -> dict:
     """Merge document analyses into a single episode plan JSON with source attribution and story-first structure."""
     material_keys = [
         "main_ideas",
@@ -176,7 +189,7 @@ def build_episode_plan(analyses: list[dict], title: str = "Local Podcast Episode
     blueprint: dict = {}
     if llm is not None and getattr(llm, "available", False):
         try:
-            blueprint = build_story_blueprint(llm, analyses, title=title)
+            blueprint = build_story_blueprint(llm, analyses, title=title, technical=technical)
         except Exception as exc:
             print(f"Warning: story blueprint generation failed, continuing without one: {exc}", file=sys.stderr)
             blueprint = {}
@@ -193,4 +206,5 @@ def build_episode_plan(analyses: list[dict], title: str = "Local Podcast Episode
         "audience": blueprint.get("audience", {}),
         "teaching": blueprint.get("teaching", []),
         "material": merged,
+        "format": "technical" if technical else "plain",
     }
