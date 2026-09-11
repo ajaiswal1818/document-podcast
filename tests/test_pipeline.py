@@ -184,6 +184,19 @@ def test_dialogue_word_cap_preserves_the_ending() -> None:
     assert capped[-1]["text"] == "The final takeaway remains available to the listener."
 
 
+def test_novo_radio_intro_is_first_spoken_line() -> None:
+    from podcast.cli import _add_novo_radio_intro
+
+    script = {"title": "The Turning Point", "dialogue": [{"speaker": "EXPERT", "text": "The evidence changed the story."}]}
+
+    _add_novo_radio_intro(script, "en")
+
+    assert script["dialogue"][0] == {
+        "speaker": "HOST",
+        "text": "Welcome to Novo Radio. Today, we're going to discuss The Turning Point.",
+    }
+
+
 def test_episode_plan_tracks_source_chunks() -> None:
     plan = build_episode_plan([
         {"facts": ["A fact"], "numbers": ["42"], "main_ideas": ["Idea 1"]},

@@ -167,6 +167,29 @@ def _cap_dialogue_words(dialogue: list[dict[str, Any]], max_words: int | None) -
     return retained + closing
 
 
+def _add_novo_radio_intro(script: dict[str, Any], language: str) -> dict[str, Any]:
+    """Guarantee a short branded opening before the story starts."""
+    dialogue = script.get("dialogue")
+    if not isinstance(dialogue, list) or not dialogue:
+        return script
+
+    title = str(script.get("title") or "today's story").strip()
+    intro = (
+        f"Velkommen til Novo Radio. I dag skal vi tale om {title}."
+        if language == "da"
+        else f"Welcome to Novo Radio. Today, we're going to discuss {title}."
+    )
+    first = dialogue[0]
+    if not isinstance(first, dict):
+        dialogue.insert(0, {"speaker": "HOST", "text": intro})
+    elif "novo radio" not in str(first.get("text", "")).lower():
+        if str(first.get("speaker", "")).upper() == "HOST":
+            first["text"] = f"{intro} {str(first.get('text', '')).strip()}".strip()
+        else:
+            dialogue.insert(0, {"speaker": "HOST", "text": intro})
+    return script
+
+
 def run_pipeline(
     input_path: str,
     output_dir: str | Path = "data/output",
@@ -302,6 +325,7 @@ def run_pipeline(
         ) < len(verdict["failed_checks"]):
             script, verdict = candidate, candidate_verdict
     script["dialogue"] = _cap_dialogue_words(dedupe_repeated_sentences(script.get("dialogue", [])), target_words)
+    _add_novo_radio_intro(script, language)
     (target_dir / "editor_verdict.json").write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     script_chars = len(json.dumps(script, ensure_ascii=False))

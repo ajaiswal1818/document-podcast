@@ -52,3 +52,16 @@ def test_web_rejects_paths_and_unsupported_uploads(tmp_path: Path) -> None:
     assert client.get("/api/episodes/..%2Fsecret").status_code == 404
     response = client.post("/api/uploads", files={"file": ("unsafe.exe", b"not a document")})
     assert response.status_code == 400
+
+
+def test_web_serves_novo_logo_and_favicon_reference(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.ensure_directories()
+    client = TestClient(create_app(config))
+
+    page = client.get("/")
+    assert page.status_code == 200
+    assert 'rel="icon"' in page.text
+    logo = client.get("/assets/novo-radio-logo.png")
+    assert logo.status_code == 200
+    assert logo.headers["content-type"] == "image/png"
