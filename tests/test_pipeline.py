@@ -736,9 +736,9 @@ def test_tts_backend_factory_uses_selected_backend() -> None:
     assert get_tts_backend("cartesia").__class__.__name__ == "CartesiaTTS"
     assert get_tts_backend("kokoro").__class__.__name__ == "KokoroTTS"
     assert get_tts_backend("vibevoice").__class__.__name__ == "VibeVoiceTTS"
-    assert get_voice_pair("nl") == {
-        "HOST": {"id": "96355f3d-0179-4c9a-a8d8-11ef0779a9b8", "name": "Noa"},
-        "EXPERT": {"id": "da743a82-ddf2-4d9b-8eb8-ff67ca0b138e", "name": "Stijn"},
+    assert get_voice_pair("da") == {
+        "HOST": {"id": "f786b574-daa5-4673-aa0c-cbe3e8534c02", "name": "Katie"},
+        "EXPERT": {"id": "a5136bf9-224c-4d76-b823-52bd5efcffcc", "name": "Jameson"},
     }
 
 
@@ -824,15 +824,15 @@ def test_pipeline_writes_cartesia_tts_manifest(tmp_path: Path, monkeypatch) -> N
 
     run_pipeline(
         str(source), output_dir=tmp_path / "output", llm=FakeLLM(), max_chunks=1,
-        research=False, tts_backend="cartesia", language="nl",
+        research=False, tts_backend="cartesia", language="da",
     )
 
     manifest = json.loads((tmp_path / "output" / "notes" / "tts_manifest.json").read_text(encoding="utf-8"))
     assert manifest["provider"] == "Cartesia"
     assert manifest["model"] == "sonic-3.6"
-    assert manifest["language"] == "nl"
-    assert manifest["voice_roles"]["HOST"]["name"] == "Noa"
-    assert manifest["voice_roles"]["EXPERT"]["name"] == "Stijn"
+    assert manifest["language"] == "da"
+    assert manifest["voice_roles"]["HOST"]["name"] == "Katie"
+    assert manifest["voice_roles"]["EXPERT"]["name"] == "Jameson"
     assert manifest["contexts"]["enabled"] is True
 
 

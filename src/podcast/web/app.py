@@ -33,7 +33,7 @@ class GenerationRequest(BaseModel):
     """Options exposed to the browser for one local pipeline run."""
 
     input_file: str = Field(min_length=1, max_length=255)
-    language: Literal["en", "nl"] = "en"
+    language: Literal["en", "da"] = "en"
     llm: Literal["auto", "openai", "qwen"] = "auto"
     tts: Literal["auto", "cartesia", "kokoro", "vibevoice", "dia"] = "auto"
     target_minutes: float = Field(default=15.0, gt=0, le=15.0)
@@ -227,4 +227,3 @@ def main() -> None:
     import uvicorn
 
     uvicorn.run("podcast.web.app:app", host=args.host, port=args.port)
-

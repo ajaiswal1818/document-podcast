@@ -82,7 +82,7 @@ class PodcastDialogue:
             audience = {}
             teaching = []
             language = "en"
-        language_name = {"en": "English", "nl": "Dutch"}.get(language, language)
+        language_name = {"en": "English", "da": "Danish"}.get(language, language)
 
         prompt = f"""
 You are producing a podcast story for a healthcare / biotech marketing field audience.

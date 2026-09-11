@@ -16,19 +16,21 @@ CARTESIA_MODEL_ID = "sonic-3.6"
 SAMPLE_RATE = 44100
 MAX_CONTINUATION_CHARS = 600
 
-# Each pair contains voices explicitly catalogued by Cartesia for the language.
+# Each pair uses one fixed Cartesia voice per podcast role. The Sonic model is
+# explicitly told the target language, so voices retain a consistent identity
+# while producing Danish or English speech.
 VOICE_PAIRS = {
     "en": {
         "HOST": {"id": "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4", "name": "Skylar"},
         "EXPERT": {"id": "47c38ca4-5f35-497b-b1a3-415245fb35e1", "name": "Daniel"},
     },
-    "nl": {
-        "HOST": {"id": "96355f3d-0179-4c9a-a8d8-11ef0779a9b8", "name": "Noa"},
-        "EXPERT": {"id": "da743a82-ddf2-4d9b-8eb8-ff67ca0b138e", "name": "Stijn"},
+    "da": {
+        "HOST": {"id": "f786b574-daa5-4673-aa0c-cbe3e8534c02", "name": "Katie"},
+        "EXPERT": {"id": "a5136bf9-224c-4d76-b823-52bd5efcffcc", "name": "Jameson"},
     },
 }
 
-LANGUAGE_NAMES = {"en": "English", "nl": "Dutch"}
+LANGUAGE_NAMES = {"en": "English", "da": "Danish"}
 HOST_VOICE = VOICE_PAIRS["en"]["HOST"]["id"]
 EXPERT_VOICE = VOICE_PAIRS["en"]["EXPERT"]["id"]
 

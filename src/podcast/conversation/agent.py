@@ -120,7 +120,7 @@ class ConversationalAgent:
         context = state.render_for_agent(self.name)
         evidence = render_evidence_for_agent(material if isinstance(material, dict) else None)
         language = str((material or {}).get("language", "en")).lower() if isinstance(material, dict) else "en"
-        language_name = {"en": "English", "nl": "Dutch"}.get(language, language)
+        language_name = {"en": "English", "da": "Danish"}.get(language, language)
         recent_turns = context.get("recent_turns", [])
         transcript = "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in recent_turns)
         if not transcript:

@@ -414,7 +414,7 @@ def main() -> None:
     parser.add_argument("--output-dir", default="data/output", help="Directory for generated output artifacts")
     parser.add_argument(
         "--language",
-        choices=["en", "nl"],
+        choices=["en", "da"],
         default="en",
         help="Spoken podcast language. Cartesia uses only a voice pair configured for this language.",
     )

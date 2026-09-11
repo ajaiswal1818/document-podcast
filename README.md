@@ -46,4 +46,4 @@ Use `--llm qwen --tts kokoro` to force local providers. Programmatic `run_pipeli
 
 ## Podcast language
 
-Use `--language nl` for a Dutch podcast. Cartesia then uses Noa (HOST) and Stijn (EXPERT), both Dutch catalog voices. English remains the default.
+Use `--language da` for a Danish podcast. Cartesia synthesizes Danish with its fixed Katie (HOST) and Jameson (EXPERT) voice pair; English remains the default.

@@ -82,7 +82,7 @@ class SceneScriptWriter:
         """Create the episode outline: sections with goals plus a running metaphor."""
         story = plan.get("story", {})
         language = str(plan.get("language", "en")).lower()
-        language_name = {"en": "English", "nl": "Dutch"}.get(language, language)
+        language_name = {"en": "English", "da": "Danish"}.get(language, language)
         teaching = plan.get("teaching", [])
         summary = plan.get("material", {}).get("plain_english_summary", "") if isinstance(plan.get("material"), dict) else ""
         prompt = (
@@ -140,7 +140,7 @@ class SceneScriptWriter:
             f"{i + 1}. {s['title']}: {s['goal']}" for i, s in enumerate(outline["sections"])
         )
         language = str(plan.get("language", "en")).lower()
-        language_name = {"en": "English", "nl": "Dutch"}.get(language, language)
+        language_name = {"en": "English", "da": "Danish"}.get(language, language)
         position = (
             "This is the COLD OPEN: begin with one vivid moment, then in the first 120 spoken words clearly introduce "
             "the person or situation, what is at stake, and the central mystery this episode will resolve. "
