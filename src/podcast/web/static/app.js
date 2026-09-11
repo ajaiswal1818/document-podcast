@@ -1,4 +1,5 @@
 const state = { episodes: [], selected: -1, jobId: null };
+const DEMO_MODE = true;
 const $ = (id) => document.getElementById(id);
 const audio = $("audio");
 const playerPanel = $("playerPanel");
@@ -73,7 +74,9 @@ async function pollJob() {
   else setStatus(job.error || "Generation failed", "failed");
 }
 $("generateForm").addEventListener("submit", async (event) => {
-  event.preventDefault(); const file = $("sourceFile").files[0]; if (!file) return;
+  event.preventDefault();
+  if (DEMO_MODE) { setStatus("Demo mode — generation is disabled"); return; }
+  const file = $("sourceFile").files[0]; if (!file) return;
   try {
     $("generate").disabled = true; setStatus("Uploading…", "queued");
     const form = new FormData(); form.append("file", file); const upload = await fetch("/api/uploads", { method: "POST", body: form });
