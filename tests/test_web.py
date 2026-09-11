@@ -62,7 +62,7 @@ def test_web_serves_novo_logo_and_favicon_reference(tmp_path: Path) -> None:
     page = client.get("/")
     assert page.status_code == 200
     assert 'rel="icon"' in page.text
-    logo = client.get("/assets/novo-radio-logo.png")
+    logo = client.get("/assets/novo-radio-logo-transparent.png")
     assert logo.status_code == 200
     assert logo.headers["content-type"] == "image/png"
 
